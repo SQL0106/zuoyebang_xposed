@@ -355,3 +355,20 @@ rsh realme 'am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init
 5. 静态补充：
    - `NewVideoRemindersLayout`（`activity/user/widget/`）方法：3 个 `<init>(Context[,...])` 65537、`init(Context)`、`initView(Context)`、`setGlideVisibility(I)`、`setVisibility(I)` — 它是 `activity/user` 学习记录页的「视频提醒」卡，未必是搜题页浮卡。
    - `grep 'activity/search/.*(Video|Clip|Player|Suspend|Float|Mini)'` 与 `newsearchv3` 内 `video|player|float|card` 均 **0 命中** → 搜题结果页没有视频相关类 → 浮卡很可能是 WindowManager 浮层或跨包复用组件。
+
+## 16. Snap 首次成功输出 + 首页与开屏分离问题（2026-10-30 00:50）
+
+- 触发成功：`/data/data/com.zuoyebang.knowledge/files/.zyb_snap.txt` 生成 431 B（`analysis/snap1.txt`、`snap2.txt`）。
+- 内容（两次相同）：
+  ```
+  SNAP activity=com.baidu.homework.activity.init.InitActivity
+  DecorView → LinearLayout → (ViewStub action_mode_bar_stub vis=G) + FrameLayout#content
+    → RelativeLayout#zyb → FrameLayout#zyb box=0,0-1280,2450 + ViewStub#zyb vis=G
+  SNAP decor views=7
+  ```
+  → **InitActivity 只是个壳/开屏，首页真实 View 树不在它里面**；且 `sActivity` 只记最后一次 onResume，所以抓不到真正前台页。
+- 修复（已改 `Snap.java`，未编译）：
+  1. 新增 `static List<Object> ACTIVITIES`（去重、上限 8），`Activity#onResume` afterHook 里 append；
+  2. 新增 `pickActivity()`：从后往前找 `hasWindowFocus()==true` 的 Activity，找不到回落 `sActivity`；
+  3. 触发线程改用 `pickActivity()`。
+- 下一步：`./build.sh` → `./deploy.sh` → 请用户停在首页 → `rsh realme 'touch .../.zyb_snap'` → scp 出 dump，定位搜索框/铃铛/红角标。

@@ -44,15 +44,13 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("FloatKiller install failed: " + t);
         }
+        // 临时探针：定位阶段用，定位完删掉/注释
+        // try { Probe.install(cl); } catch (Throwable t) { log("Probe install failed: " + t); }
+        // try { ViewDump.install(cl); } catch (Throwable t) { log("ViewDump install failed: " + t); }
         try {
-            Probe.install(cl);
+            Snap.install(cl);
         } catch (Throwable t) {
-            log("Probe install failed: " + t);
-        }
-        try {
-            ViewDump.install(cl);
-        } catch (Throwable t) {
-            log("ViewDump install failed: " + t);
+            log("Snap install failed: " + t);
         }
         log("all hooks installed");
     }
