@@ -1,0 +1,20 @@
+# 构建产物 / 大文件 / 本地产物
+base.apk
+zybclean.apk
+build/
+out.apk
+*.class
+
+# 分析产物（截图、dump、拉下来的 LSPosed 库）
+analysis/*.png
+analysis/*.raw
+analysis/*.txt
+analysis/classes.txt
+analysis/fastad_methods.txt
+analysis/imp_methods.txt
+analysis/homepage_classes.raw
+analysis/lspd/
+analysis/lspd_live/
+*.idsig
+analysis/*.log
+analysis/*.db

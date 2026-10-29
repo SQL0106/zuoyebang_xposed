@@ -1,0 +1,246 @@
+# 作业帮去广告 Xposed 模块 —— 工作笔记
+
+> 每次压缩上下文前必须更新本文件。所有结论以本文件为准，不依赖记忆。
+
+## 0. 任务
+
+用户原话：「com.zuoyebang.knowledge，目标去广告，去除首页信息流，还有你觉得是垃圾的内容，做成Xposed，机器realme，用rsh链接。」
+另一条要求：「记得经常写md，在压缩之前写进去。」
+
+1. LSPosed/Xposed 模块（不重打包 APK），作用于 `com.zuoyebang.knowledge`。
+2. 去广告（开屏/信息流原生/banner/插屏/激励视频/浮层）。
+3. 去首页信息流。
+4. 去其他「垃圾」内容（自行判断，大改前确认）。
+5. 部署机 = realme RMX5062。
+
+## 1. 目录与产物
+
+| 路径 | 说明 |
+|---|---|
+| `/home/SQL916/zuoyebang_xposed/` | 工作目录（**不是 git repo**） |
+| `./base.apk` | 作业帮原版 APK，56,485,322 B（v14.34.0 / versionCode 1738） |
+| `./analysis/classes.txt` | 57,606 个类 descriptor（一行一个，`Lxxx;`） |
+| `./analysis/fastad_methods.txt` | com.fastad + com.homework.fastad 全部方法（5398 行） |
+| `./analysis/homepage_classes.raw` / `.txt` | newhomepage/index/feed 类 + 父类（1030 行，格式 `L类; -> L父类;`） |
+| `./analysis/imp_methods.txt` | com.zuoyebang.imp (211 类) 方法表 |
+| `./analysis/doload.raw` | doLoadAD/doShowAD 原始表输出 |
+| `./libs/stubs/de/robv/android/xposed/*.java` | **自写 Xposed API 编译期 stub**（6 个文件，已写好：IXposedMod / IXposedHookLoadPackage / callbacks.XC_LoadPackage / XC_MethodHook(+MethodHookParam+Unhook) / XposedBridge / XposedHelpers） |
+| `./analysis/NOTES.md` | 本文件 |
+
+## 2. 本机环境（OnePlus 8, Debian 13 aarch64）
+
+- java 25.0.5；**无 jadx/apktool/gradle/Android SDK**。`/home` 14G，剩 ~3G。
+- Android SDK：`~/android-sdk/cmdline-tools.zip` 从 `https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip` 下载（2026-10-30 00:00 时 80MB，预计总量 ~130MB，速度约 15-20MB/min）。
+- **jitpack 取 `api-82.jar` 失败**（返回 67 字节错误文本）→ 改用自写 stub（见上），编译只需 javac；**不需要 android.jar**（模块全部用字符串类名 + XposedHelpers 反射，不 import android.*）。
+- 构建链路：`javac -cp libs/stubs/classes (或直接编译 stub 源码)` → `d8 --output out classes/` → `aapt2 link` 生成 manifest+resources → `zipalign` → `apksigner`。仍需 build-tools 的 **d8 / aapt2 / apksigner / zipalign**（下载完成后 `sdkmanager --install "build-tools;34.0.0"`）。
+
+## 3. 设备 realme（RMX5062）
+
+- `rsh realme '<cmd>'`；`~/.ssh/config`: HostName 192.168.1.100，User root，Port 8022，IdentityFile `~/.ssh/Keys/id_ed25519`。
+- `Linux localhost 6.1.157-android14-...`，Android 16/SDK 36，KernelSU，`/data` 剩 83G。
+- 应用：`/data/app/~~5h_0UpGKRBL1XR8IwSTeGg==/com.zuoyebang.knowledge-Mzauk9M1_b2CVfO9Xc1ZHQ==/base.apk`（单 base.apk）。
+- **LSPosed v2.2.1 (7912)** 已装启用（`/data/adb/modules/zygisk_lsposed`，Zygisk 模式）。
+- scp 56MB ≈ 2.1s。
+
+## 4. APK 基本信息
+
+- `com.zuoyebang.knowledge`，14.34.0 / 1738，minSdk 21 / targetSdk 30 / compileSdk 32
+- application `com.baidu.homework.base.ZybApplicationLike`，largeHeap/persistent/usesCleartextTraffic=true
+- 组件：activity 402 / alias 1 / provider 25 / receiver 16 / service 34；7 dex / 57,606 类
+
+## 5. 关键类结构
+
+### 5.1 首页（新首页 `com.baidu.homework.activity.newhomepage`）
+- `d_home/DHomepageFragment` = 首页 Fragment；`d_home/fragment/DHPListFragment` = 信息流列表 Fragment
+- **`d_home/adapter/DFeedListAdapter`**（→ `RecyclerView$Adapter`）= 首页信息流适配器
+  - 字段：`a:Context  b:ask_feed.listitem.a  c:DHPHomeTabHelper$HomeTabBean  d:List  e:AtomicInteger  f:SparseArray  g:SparseIntArray  h:int  i:adapter.g`
+  - 方法：`addData(List)`（17=public final）、`q(List)I`（18=public final）、`getItemCount()I`、`getItemViewType(I)I`、`onCreateViewHolder(ViewGroup,I)`、`onBindViewHolder(ViewHolder,I)`、`h/i/j/v(...HPListItem)`、`m(ADNewBaseHolder,I)`、`n(AHPBaseHolder,I)`、`o(ViewGroup,I)AHPBaseHolder`、`p(AHPBaseHolder)`
+- 其他 adapter：`d_home/adapter/DFeedFollowerAdapter`、`e_home/adapter/EHPFeedsListAdapter`、`d_home/adapter/DHeaderImpAdapter`、`DHeaderRecyclerViewAdapter`、`DFunctionAreasGridAdapter`、`knowledge/adapter/KnowledgeListAdapter`、`HomeBannerAdapter`（homepage 的 banner 位）
+- `a_home` = 首页列表项/广告位容器（只有子包 holder/adapter/bean/component/util/widget）：
+  - `a_home/bean/HPListItem` **信息流数据模型**，常量 `TYPE_AD / TYPE_FEED / TYPE_LINKED_AD / TYPE_VIP_RECOMMEND`（int），字段 `itemType:int, adType:int, adItemWrappers:List, listItem:a_home.bean.b, isExposed:Z`，构造 `<init>(b) / (b,List) / (b,List,I)`
+  - `a_home/holder/` 62 类：基类 `AHPBaseHolder`(ViewHolder)→`AHPBaseNlogHolder`/`ADNewBaseHolder`/`DefaultHolder`/`HPDefaultFullHolder`/`HPHiveViewHolder`；广告子类 `ADNativeHolder10690/12226/12227/12661/12680/13342`、`ADNativeNewBaseHolder`、`ADInnerNativeBaseHolder`、`ADCardComplexPageHolder`、`ADNewGroupBaseHolder`、`ADNewGroupSinglePagerHolder`、`ADNewCourseLargeImg3`；d_home/holder 下 `HPImageHolder/HPVideoHolder/HPHotTopicHolder/HPPublishHolder/HPFeedbackHolder`
+  - `a_home/adapter/ADOnePlusNPageAdapter`（PagerAdapter）
+- `e_home/EHomepageFragment` + `EHPListFragment`（另一个 tab 的 feed）
+- `com.baidu.homework.activity.index.IndexActivity` = 老首页
+- `d_home/publish/*` = UGC 发布（115 类），`d_home/helper`(47)/`persenter`(42)/`fragment`(30)
+- `knowledge/*` = 知识库（viewmodel 77 / data 37 / holder 25 / adapter 7）
+
+### 5.2 作业帮广告聚合层 `com.fastad`（944 类）+ `com.homework.fastad`
+**全部 34 个适配器都有 `doLoadAD()V` 与 `doShowAD()V`（无参）——最佳统一 hook 点：**
+
+```
+com.fastad.api.ApiBannerAdapter / ApiFlowExpressAdapter / ApiInterstitialAdapter / ApiRewardVideoAdapter / ApiSplashAdapter
+com.fastad.baidu.BDBannerAdapter / BDFlowExpressAdapter / BDHalfFlowExpressAdapter / BDHalfSplashAdapter / BDInterstitialAdapter / BDRewardVideoAdapter / BDSplashAdapter
+com.fastad.csj.CsjBannerAdapter / CsjFlowExpressAdapter / CsjHalfFlowExpressAdapter / CsjHalfRewardVideoAdapter / CsjHalfSplashAdapter / CsjInterstitialAdapter / CsjRewardVideoAdapter / CsjSplashAdapter
+com.fastad.ks.KsFlowExpressAdapter / KsHalfFlowExpressAdapter / KsHalfSplashAdapter / KsInterstitialAdapter / KsRewardVideoAdapter / KsSplashAdapter
+com.fastad.ylh.YlhBannerAdapter / YlhFlowExpressAdapter / YlhHalfFlowExpressAdapter / YlhHalfSplashAdapter / YlhInterstitialAdapter / YlhRewardVideoAdapter / YlhSplashAdapter
+h.m.c.f.m
+```
+另外每个 api 适配器有 `doDestroy()V`、`getM*Ad()`、`setM*Ad(...)`；`ApiFlowExpressAdapter.formatClose()V`。
+- 模板：`com.fastad.api.express.FlowExpressTemplateV1..V5`、`api.interstitial.InterstitialTemplateV1..V3`、`api.banner.BannerAd`、`api.interstitial.InterstitialAd`
+- 激励视频 Activity：`com.fastad.api.reward.RewardAd1Activity` / `RewardAd2Activity` / `RewardAd3Activity`、`com.fastad.csj.half.reward.CsjRewardActivity`
+- 流程：`com.homework.fastad.flow.b`（`loadAd(String)` / `show(Activity)` / `j(FrameLayout)` / `destroy()`）、`com.homework.fastad.reward.h`、`com.homework.fastad.common.web.ApiWebActivity` / `ApiAgreementActivity`、`com.homework.fastad.reward.RewardDialogActivity`、`FastAdDebugActivity`
+
+### 5.3 内置广告 SDK（类名完整）
+穿山甲 `com.bytedance.sdk.openadsdk` 3553 / 快手 `com.kwad` 5556 / 百度 `com.baidu.mobads` 1759 / 穿山甲新 `com.bytedance.android.dy.sdk.pangle` 322 / 优量汇 `com.qq.e` 169；`com.ss.android.socialbase.downloadlib`、`com.byted.live.lite`。权限 `com.zuoyebang.knowledge.openadsdk.permission.TT_PANGOLIN`。
+已知 Activity：`TTNativePageActivity`、`TTRewardVideoActivity`、`TTFullScreenVideoActivity`、`com.qq.e.ads.ADActivity`、`stub.activity.Stub_Standard_Activity`。
+
+### 5.4 开屏
+- `com.zuoyebang.imp.splash.*`（146 类）：`InnerSplashProcessor`(`closeSplash()V`)/`InnerSplashProcessor_Impl`(`closeSplash`/`onSplashClose(Z)`)、`AdxModuleHelper`/`_Impl`、`AdSplashRunnable`、`AdxCacheUtils`、`AdFilterPreference`（枚举，只有 `FILTER_ADX_VERSION`）、`nativ.AdItem`/`ADXAdItem`
+- `com.baidu.homework.activity.init.SplashContainer` + `SplashView`（启动页 View，不是广告位本身）
+- `com.baidu.homework.activity.init` 相邻包；`com.baidu.homework.ads.advertise.AdResumeSplashActivity`（回前台插屏/开屏）
+
+### 5.5 其他包
+`com.zuoyebang.imp`(211 类，广告投放/曝光统计，`AdPreference` 只有 `PHONE_WIFI_MAC`)、`com.baidu.homework.ads`(46 类，`advertise/ZybAdLoader`：`<init>(Activity,Lifecycle)`、`a()..i(String,Z,String)`、`e()Z`、`h(Z)V`)、`com.zuoyebang.page.activity.BaseCacheHybridActivity`、`com.zuoyebang.hivekit.core.HiveViewActivity`、`com.qiyukf.*`（客服）、`com.zhihu.matisse.*`、`com.alipay.sdk.*`、`com.tencent.tauth.*`、`com.zuoyebang.design.test.*`（Test*Activity）、`com.baidu.homework.debug.*`、`activity.shopmall.coupon.*`、`activity.fudao.purchase.PayParentsActivity`、`activity.user.StudyCoin*`。
+无 sigmob/mintegral/unity/anythink。
+Robust 未混淆 token 印证：`com.meituan.robust.ChangeQuickRedirect`（热修框架在，类字段含 `changeQuickRedirect`）。
+
+## 6. dexsql 用法
+
+- CLI `/home/SQL916/.local/bin/dexsql`：`query -i base.apk -s "SQL"`（重复 -s、`--limit`、`--timing`、`-t`）、`tables -i`、`decode -i --class 'Lx;' | --method 'Lx;->y()V'`、`--interactive`、`--cache NAME=SQL`。**输出是 ASCII 表格**，用 `grep -oE 'L[^ |]*'` 或 `awk -F'|'` 抽列；大结果先落 `analysis/*.raw` 再 grep。
+- 表：`classes(descriptor, superclass_descriptor, access_flags, source_file…)`、`methods(class_descriptor, name, descriptor, param_descriptors, access_flags, opcode_count)`、`method_calls`、`method_strings`、`strings`、`fields(class_descriptor, name, descriptor)`、`class_methods`、`types`、`dex_files`、`map_items`、`id_items`。**没有 manifest 专用表**（Manifest 走 MCP `dexsql.get_manifest` / `get_manifest_components`）。
+- access_flags 值：1=public、17=public final、18=public final+synchronized?、4161=public+??（照抄不影响）。
+- MCP 版：`dexsql.open_dataset{inputs}`→dataset_id、`dexsql.query{dataset_id,sql:[...]}`、`get_manifest`、`get_manifest_components`、`decode`。Code Mode 里写**纯 JS**（不能带 TS 类型注解）。
+
+## 7. 模块设计（v1，已定稿方向）
+
+包名 `com.sql916.zybclean`，入口类 `com.sql916.zybclean.HookEntry implements IXposedHookLoadPackage`，`handleLoadPackage` 只在 `com.zuoyebang.knowledge` 生效（log 进程名）。
+
+**A. AdBlocker**：对上面 34 个适配器类 `hookAllMethods(c,"doLoadAD")` 与 `"doShowAD"` → before `param.setResult(null)` 跳过原方法。类不存在则跳过并 log。
+> 风险：跳过 load 可能导致等待回调的流程挂起（尤其开屏）。若发现卡启动或卡加载，改为「放行 doLoadAD、只拦 doShowAD」，或其他回调补偿。
+
+**B. FeedKiller**：hook `androidx.recyclerview.widget.RecyclerView#setAdapter`（afterHook）：adapter 类名 ∈ {DFeedListAdapter, EHPFeedsListAdapter, DFeedFollowerAdapter} → 对 RecyclerView `setVisibility(8)`（反射 callMethod）。另打算 hook `DFeedListAdapter.addData(List)` 过滤 `HPListItem.itemType == TYPE_AD/TYPE_LINKED_AD/TYPE_VIP_RECOMMEND`（常量运行时用 `XposedHelpers.getStaticIntField` 读，别硬编码）。
+
+**C. ActivityKiller**：hook `android.app.Activity#onCreate`（afterHook）→ 类名在黑名单则 `callMethod(this,"finish")`：`AdResumeSplashActivity`、`com.fastad.api.reward.RewardAd1/2/3Activity`、`com.fastad.csj.half.reward.CsjRewardActivity`、TT 系列广告 Activity、`com.qq.e.ads.ADActivity` 等。
+
+**D. 待定（垃圾内容）**：商城优惠券、学币充值、家长付费、Test/Debug 页面——先不动，v1 跑通后再问用户。
+
+### 打包细节
+- `AndroidManifest.xml`：package `com.sql916.zybclean`，minSdk 24，无 Activity；`<meta-data android:name="xposedmodule" android:value="true"/>`、`xposeddescription`、`xposedminversion=53`（xposedscope 需 string-array 资源，暂不用，LSPosed 里手动勾 `com.zuoyebang.knowledge`）。
+- `assets/xposed_init` 内容一行：`com.sql916.zybclean.HookEntry`。
+- 编译：`javac -d out -cp <stubs> src/**/*.java`；stub 源码单独编译到 `libs/stubs/classes`，**不参与 d8**（避免与 LSPosed 自带 API 冲突）；`d8 --min-api 24 --output dexout out/**/*.class`。
+- 安装：`adb`? — 用 `rsh realme 'pm install -r /data/local/tmp/x.apk'`（先 scp 到 /data/local/tmp）。
+
+## 8. 待办清单
+
+- [x] 拉 APK、Manifest/类结构侦察
+- [x] dump classes/fastad/homepage/imp/doload
+- [x] 定位首页信息流：`DFeedListAdapter` + `HPListItem.itemType` 类型过滤
+- [x] 定位全站广告统一入口：34 个 `doLoadAD/doShowAD`
+- [x] 写 Xposed API stub（6 文件，编译期用）
+- [ ] 完成 cmdline-tools 安装 → `sdkmanager --install "build-tools;34.0.0"`（+ 也许 platforms;android-34）
+- [ ] 写模块源码 `src/com/sql916/zybclean/*.java`
+- [ ] 打包 + `rsh realme` 安装 + LSPosed 勾作用域 + force-stop 验证
+- [ ] logcat 观察挂起/crash，迭代
+- [ ] 交付：APK 路径、启用步骤、已知副作用
+
+## 9. 验证命令备忘
+
+```sh
+rsh realme 'pm list packages | grep zuoyebang'
+rsh realme 'am force-stop com.zuoyebang.knowledge'
+rsh realme 'logcat -d -s XposedBridge:* | tail -100'   # 若 tag 不对，用 LSPosed 日志
+rsh realme 'am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init.SplashActivity'  # 名称待确认
+```
+
+---
+
+## 10. 2026-10-30 进度快照（第二轮）
+
+### 已完成的代码（`~/zuoyebang_xposed/src/com/sql916/zybclean/`）
+- `HookEntry.java`：`handleLoadPackage` 只在 `com.zuoyebang.knowledge` 生效，依次装 AdBlocker / FeedKiller / ActivityBlocker / DialogKiller，各自 try-catch；`log()` → `XposedBridge.log("ZYBCLEAN: ...")`。
+- `AdBlocker.java`：34 个适配器全名数组（`com.fastad.api.Api*` 5 + `com.fastad.baidu.BD*` 7 + `com.fastad.csj.Csj*` 8 + `com.fastad.ks.Ks*` 6 + `com.fastad.ylh.Ylh*` 7 + `h.m.c.f.m`），对 `doLoadAD`/`doShowAD` 做 `XposedBridge.hookAllMethods` → before `setResult(null)`，每次调用打 log；统计 `installed on N/34`。
+- `FeedKiller.java`：
+  - `FEED_ADAPTERS` = DFeedListAdapter / EHPFeedsListAdapter / DFeedFollowerAdapter；对其中签名为 `(List)` 的 `addData`、`q` 方法 beforeHook，用 `filter()` 生成新 ArrayList（剔除 `itemType ∈ {TYPE_AD, TYPE_LINKED_AD, TYPE_VIP_RECOMMEND}`）替换 `param.args[0]`；afterHook 再 `stripFieldList()` 清成员 `d`（`List.removeIf`）。
+  - ad type 常量运行时从 `Lcom/baidu/homework/activity/newhomepage/a_home/bean/HPListItem;` 用 `getStaticIntField` 读，读不到则 adTypes=null（不过滤）。
+  - `hookAdapterHost()` 对 `RecyclerView` / `androidx.viewpager.widget.ViewPager` / `ViewPager2` 的 `setAdapter` afterHook，adapter 简单类名含 `HomeBannerAdapter` 或 `ADOnePlusNPageAdapter` → `setVisibility(8)`。
+- `ActivityBlocker.java`：hook `android.app.Activity#onCreate` afterHook，类名命中精确黑名单（AdResumeSplashActivity、com.fastad.api.reward.RewardAd1/2/3Activity、com.fastad.csj.half.reward.CsjRewardActivity、com.homework.fastad.reward.RewardDialogActivity、com.homework.fastad.common.web.ApiWebActivity、com.qq.e.ads.ADActivity/PortraitADActivity/LandscapeADActivity）或前缀黑名单（com.bytedance.sdk.openadsdk.core.activity. / .stub.activity. / com.baidu.mobads.sdk.internal. / com.baidu.mobads.production. / com.kwad.sdk.api.proxy.app.）→ `callMethod(self,"finish")`。
+- `DialogKiller.java`：首页弹窗任务体系基类 `com.baidu.homework.activity.index.dialog.u`（12 个子类 i/j/k/l/m/n/o/p/q/r/s/t，`ZybDialogTaskManager` 调度）；hookAllMethods `<init>` 仅打 log（探明谁被创建）；对基类中「单参 `android.app.Activity`」的方法（`e(Activity)` = 展示入口）beforeHook → `setResult(null)` 全拦（`ALLOW` 白名单预留为空）；另 hook `index.dialog.main_page.MainPageGuideDialog#show` 拦截新手引导浮层。
+- **javac 编译已通过**（`javac --release 8 -cp build/stubs`，stub 单独编译到 `build/stubs`，不进 dex）。
+- `AndroidManifest.xml`（package `com.sql916.zybclean`, minSdk24/targetSdk34, label `zybclean`, meta-data xposedmodule/xposeddescription/xposedminversion=53）与 `assets/xposed_init`（一行 `com.sql916.zybclean.HookEntry`）已写。
+- `build.sh`：javac → `d8 --min-api 24 --release --lib android.jar` → `aapt2 link` → `zip` 合入 classes.dex + assets/xposed_init → `zipalign -f -p 4` → `apksigner`（keystore `zybclean.keystore`，口令 zybclean，首次自动 `keytool -genkeypair` 生成）→ 输出 `zybclean.apk`。SDK 根路径假定 `$HOME/android-sdk/sdk`，build-tools 取最新，`platforms/android-34/android.jar`。
+- `deploy.sh`：`scp zybclean.apk realme:/data/local/tmp/` → `rsh realme "pm install -r ... && am force-stop com.zuoyebang.knowledge"`。
+
+### 开屏风险调研（dexsql CLI）
+- `com.zuoyebang.imp.splash.k` 是**接口**，只有 `onSplashClose(Z)V`；约 25 处调用者（`splash.d/j/t/v`、`f`、`g`、`h$f.run`、`i$h.run`、`p.run`、`q/*` 等）→ 说明有独立倒计时/超时关闭路径（`p.run`），被 AdBlocker 跳过加载后大概率会超时自关。
+- `InnerSplashProcessor` 的 `closeSplash()V` / `init(Activity,ViewGroup,Runnable)` / `showSplashView()` / `loadAdxCacheItem()Z` 等 access_flags=1025（public+synthetic，实例方法，Robust 生成 Impl 痕迹）。**结论：v1 先不加额外开屏兜底，等实测**。
+- 首页弹窗子类见 DialogKiller 说明；`analysis/garbage_candidates.raw` 存了 dialog/banner/redpacket 候选清单。
+
+### LSPosed 部署方式（重要，设备无 LSPosed 管理 App）
+- `pm list packages | grep -i lsposed` 只有 `org.lsposed.corepatch`，**没有 org.lsposed.manager** → 不能在 UI 里勾选。
+- LSPosed 数据：`/data/adb/lspd/config/modules_config.db`（+`-wal`,`-shm`，已 scp 到 `analysis/lspd/`）。表结构：
+  - `modules(module_pkg_name TEXT PK, apk_path TEXT)`
+  - `modules_state(module_pkg_name, user_id, enabled BOOLEAN DEFAULT 0, scope_request_blocked BOOLEAN DEFAULT 0, PK(module_pkg_name,user_id))`
+  - `scope(module_pkg_name, app_pkg_name, user_id, PK(三者))`
+  - `module_configs(module_pkg_name,user_id,group_name,key_name,data BLOB)`、`lspd_configs(key_name,data)`、`app_configs(app_pkg_name,data)`
+- 模块目录：`/data/adb/modules/zygisk_lsposed/`（含 `bin daemon daemon.apk framework.dex lib lspctl lspd`）。
+- `lspctl` 是 shell 脚本：校验 `$BOOTCLASSPATH` 非空后 `exec app_process -Djava.class.path=$dir/daemon.apk -Xnoimage-dex2oat /system/bin --nice-name=lspctl org.lsposed.lspd.cli.CliMain "$@"`。
+- 绕过校验直接跑：`P=$(pidof com.android.systemui); BC=$(tr "\0" "\n" < /proc/$P/environ | sed -n "s/^BOOTCLASSPATH=//p"); BOOTCLASSPATH="$BC" /system/bin/app_process -Djava.class.path=/data/adb/modules/zygisk_lsposed/daemon.apk -Xnoimage-dex2oat /system/bin --nice-name=lspctl org.lsposed.lspd.cli.CliMain <args>` → **试 `--help` 时无任何输出（BC len=2702 说明环境变量取到了），需再试 `modules list` / 看退出码**。
+- 备选：直接改 `modules_config.db`（插 modules + modules_state.enabled=1 + scope 行）后重启 lspd（或重启手机）。改 DB 前需确认 WAL 安全与 lspd 是否长驻。
+
+### SDK 工具链现状（阻塞点）
+- `~/android-sdk/cmdline-tools.zip` 已完整下载（153,607,504 B，`unzip -t` 通过），解压到 `~/android-sdk/sdk/cmdline-tools/latest/`（含 bin/lib/source.properties，结构正确）。
+- **`sdkmanager` 报错**：`找不到或无法加载主类 com.android.sdklib.tool.sdkmanager.SdkManagerCli`（ClassNotFoundException）→ 待查：`latest/bin/sdkmanager` 脚本的 classpath 写法 / `lib/` 里是否有 sdklib jar / Java 25 兼容性（本机 java 25.0.5，可能需换 JDK 17）。
+- `build-tools;34.0.0` 与 `platforms;android-34` 尚未安装 → `./build.sh` 目前会在检查处退出。
+
+### 下一步（按顺序）
+1. 修 sdkmanager（看 `latest/bin/sdkmanager` 脚本 + `ls latest/lib | grep -i sdklib`；必要时下 jdk17 或手工下载 build-tools zip 解压）。
+2. 装 build-tools/aapt2/d8/apksigner/zipalign + android.jar → 跑 `./build.sh` 出 `zybclean.apk`。
+3. 用 lspctl（或改 DB + 重启）注册并启用模块、加 scope `com.zuoyebang.knowledge`。
+4. `./deploy.sh` 安装 → `rsh realme 'logcat -d | grep ZYBCLEAN'` 验证；重点看开屏是否卡住、首页是否空。
+5. 按实测补 v2：首页弹窗白名单、垃圾入口（商城/优惠券/学币）、悬浮广告。
+
+---
+
+## 11. 2026-10-30 构建/部署打通（第三轮）
+
+### 构建链路最终形态（本机 aarch64，Google build-tools 是 x86_64 跑不了！）
+- **根因**：Google build-tools 只发 x86_64 二进制 → `aapt2` 报「可执行文件格式错误」；`build-tools/34.0.0/lib/d8.jar` 被**截断成正好 12 MiB**（12,582,912 B，zip 无效）。
+- **解决**：`sudo -n apt-get install -y aapt zipalign apksigner`（Debian trixie arm64 原生，`aapt` 1:14~beta1-3 → `/usr/bin/aapt` 符号链到 `/usr/lib/android-sdk/build-tools/debian/aapt`）。
+- dex：用 cmdline-tools 里的完整 **`$HOME/android-sdk/sdk/cmdline-tools/latest/lib/r8.jar`**（15,305,887 B，`unzip -t` OK）跑 `java -cp r8.jar com.android.tools.r8.D8`。
+- **`sdk/platforms/android-34/android.jar` 被截断成 8 MiB**（8,388,608 B，正是 AGENTS.md 说的「掉电截断在 8MiB」）→ 从 `~/android-sdk/plat34.zip` 重新 unzip 出该文件 + `sync`，现在 26,361,808 B，`unzip -t` 无错。**下载/解压后的 jar 必须 `unzip -t` 验完整性**。
+- `build.sh` 现已改为：javac(stub) → javac(src) → `java -cp r8.jar com.android.tools.r8.D8 --min-api 24 --release --lib android.jar --output build/dex ...` → `/usr/bin/aapt package -f -M AndroidManifest.xml -A assets -I android.jar -F build/base.apk`（**aapt1 会自动打包 assets**）→ `zip` 加 classes.dex → `/usr/bin/zipalign -f -p 4` → `/usr/bin/apksigner sign`（keystore `zybclean.keystore`，口令 zybclean，已生成）→ `BUILD_OK`。
+- 产物 `~/zuoyebang_xposed/zybclean.apk` = **16,791 B**，内容：AndroidManifest.xml / assets/xposed_init / classes.dex (15,044 B) / META-INF 签名。`aapt dump xmltree` 确认三个 meta-data（xposedmodule=true、xposeddescription=作业帮净化：去广告、去首页信息流、xposedminversion=0x35=53）。
+
+### 部署
+- `bash deploy.sh` → scp 到 realme:/data/local/tmp → `pm install -r` = **Success**（apk_path=`/data/app/~~mKqt8OkCaXEyur7zNnDhQw==/com.sql916.zybclean-7z684eqy4CU37AhKmj94nw==/base.apk`）。
+- `bash enable_module.sh` → 已把模块写进 lspd DB：modules 26 条、`modules_state.enabled=1`、`scope=com.zuoyebang.knowledge`。
+- **⚠️ 当前阻塞：lspd 起不来**。kill 之后 `nohup daemon --force &`、`setsid nohup ... &`、直接 `(./lspd --force &)` 都没让 pidof lspd 出现；只剩 zygisk companion 进程（zn-zygisk-companion64）。`daemon` 脚本会 `./lspd "$@" >/dev/null 2>&1 & PID=$!; wait $PID`，rc≠0 时写 `/data/adb/lspd/log/daemon-$PID-crash-*.log` 并 dump logcat。**正在后台跑**：`ls -lt /data/adb/lspd/log/` + `(./lspd --force >/data/local/tmp/lspd.out 2>&1 &); sleep 5; pidof lspd; cat /data/local/tmp/lspd.out`（shell ID `sh_1887a1051001M2KcTOfyx5yReV`）。
+- 待查方向：lspd 可能需要 zygisk 侧的 socket/环境（正常由 service.sh 在 **zygisk 注入上下文**里拉起）、或 native 二进制依赖库路径（`lib/`）、或 `--force` 参数行为；实在不行**重启手机**让 init 正常拉起 lspd（最稳，DB 已改好，重启即生效）。
+
+### 验证脚本
+- `bash check.sh`（DEV=realme）：grep `/data/adb/lspd/log/*.log` 与 `logcat -d` 里的 `ZYBCLEAN`，并 `ps -A | grep zuoyebang`。**XposedBridge.log 在 LSPosed 下写到 lspd 日志**，logcat 不一定有。
+
+---
+
+## 12. 2026-10-30 00:30 —— 模块已在真机生效（首次验证）
+
+### lspd 重启失败 → 直接重启手机（已解决）
+- `lspd` 不是二进制而是 **shell 脚本**：`exec /system/bin/app_process -Djava.class.path=$dir/daemon.apk -Xnoimage-dex2oat /system/bin --nice-name=lspd org.lsposed.lspd.Main "$@"`。
+- kill 掉 lspd 后手动拉起（nohup / setsid / `(./lspd --force &)` / `timeout 8 ./lspd --force`）**全部 rc=0 但无输出、无进程**（app_process 里的 Main 静默 exit，产物 stdout 为空）→ 手动重启 lspd 这条路走不通。
+- **结论：改完 lspd DB 后必须重启手机**。`rsh realme 'sync; (sleep 2; reboot) >/dev/null 2>&1 &'` → 约 25s 后 `sys.boot_completed=1`，`pidof lspd` = 2105（正常）。
+- 重启后 DB 内容仍在（26 modules / zybclean enabled=1 / scope=com.zuoyebang.knowledge）。
+
+### 运行验证（真实日志）
+- 启动 Activity：`am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init.InitActivity`（**launcher = InitActivity**，不是 SplashActivity）。
+- **注意：`logcat` 里看不到 ZYBCLEAN 输出**，LSPosed 把 `XposedBridge.log` 写进自己的日志文件：`/data/adb/lspd/log/verbose_<boot时间>.log`（grep `ZYBCLEAN`，行格式带 `(com.zuoyebang.knowledge)[com.sql916.zybclean,XposedBridge,...]`）。`modules_<时间>.log` 是各模块自身日志的镜像。
+- 实测输出（19 行）：
+  - `hook loaded, process=com.zuoyebang.knowledge`
+  - `all hooks installed`
+  - `AdBlocker installed on 34/34 adapters` ← 34 个 fastad 适配器全部 hook 成功
+  - `ad item types = [1, 2, 3]` ← HPListItem 的 TYPE_AD/TYPE_LINKED_AD/TYPE_VIP_RECOMMEND 常量读到了
+  - 3 条 `feed filter installed:`（DFeedListAdapter / EHPFeedsListAdapter / DFeedFollowerAdapter）
+  - 12 条 `block popup: com.baidu.homework.activity.index.dialog.{i,k,l,n,o,p,q,s,t}` 等（**是安装期确认，不是运行时拦截**）
+  - `ActivityBlocker installed`
+  - 2 条失败：`hook h.m.c.f.m.doShowAD/doLoadAD failed -> IllegalArgumentException: Cannot hook abstract methods`（**已知无害**：`h.m.c.f.m` 是接口，其实现类已包含在 34 个里；可后续从列表移除避免噪音）
+- 目录里同时存在 `/data/adb/lspd/log/verbose_*.log`（hook 详细，含 ZYBCLEAN）与 `/data/adb/lspd/log/modules_*.log`；每次开机一份。
+
+### 验证技巧（无 UI 自动化时）
+- 设备 `uiautomator dump` 不可用，但 **`screencap -p /data/local/tmp/x.png` + scp + 本机 `read` 看图**完全可行。
+- `dumpsys window | grep mCurrentFocus` 取当前前台包名（用户当时在用 `mark.via.gp`（Via 浏览器）看 opencode web UI）。
+- 验证完记得把前台还给用户原来的 App。
+
+### 待办（v2 候选）
+- 去掉 `h.m.c.f.m` 的无效 hook（abstract）以消除报错噪音。
+- 运行时确认：首页是否真的空/无广告、开屏是否卡住、`doShowAD` 是否在首屏后被调用（日志暂无运行时拦截记录，可能是启动 10s 内未触发）。
+- 弹窗 12 个子类目前是「全拦（`e(Activity)` beforeHook 直接 setResult(null)）」——需确认没有误伤必要弹窗（如协议/升级/登录）。
