@@ -7,9 +7,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同一分支新提交取消旧构建，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -18,31 +27,106 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: 安装打包工具
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends aapt zipalign apksigner
-
-      - name: 安装 Android SDK platform（提供 android.jar 与 r8.jar）
+      - name: 定位 Android SDK 目录
         run: |
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34"
+          echo "SDK_DIR=$SDK" >> "$GITHUB_ENV"
+          echo "SDK_DIR=$SDK"
+
+      # android.jar 与 r8.jar 体积大、下载慢，缓存 platforms/build-tools
+      - name: 缓存 Android SDK 组件
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SDK_DIR }}/platforms
+            ${{ env.SDK_DIR }}/build-tools
+          key: ${{ runner.os }}-androidsdk-p34-bt34-v1
+          restore-keys: |
+            ${{ runner.os }}-androidsdk-p34-
+
+      - name: 安装打包工具（apt 缓存到 runner 自带镜像）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends aapt zipalign apksigner
+
+      - name: 安装 Android SDK platform（缓存命中则跳过下载）
+        run: |
+          if [ -f "$SDK_DIR/platforms/android-34/android.jar" ]; then
+            echo "android.jar 已在缓存中，跳过"
+          else
+            yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+            "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34"
+          fi
+          cat "$SDK_DIR/platforms/android-34/source.properties" 2>/dev/null || true
 
       - name: 编译
+        shell: bash
         run: |
+          set -o pipefail
           chmod +x build.sh
-          ./build.sh
+          ./build.sh 2>&1 | tee build.log
+
+      - name: 编译信息
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "== java"; java -version 2>&1
+            echo "== sdk"; echo "$SDK_DIR"; ls "$SDK_DIR/platforms" "$SDK_DIR/build-tools" 2>&1
+            echo "== tools"; aapt version 2>&1 | head -2; apksigner --version 2>&1 | head -2
+            echo "== 产物"; ls -l zybclean.apk 2>&1
+            echo "== build 目录"; find build -maxdepth 2 2>/dev/null | head -50
+          } > build-info.txt
+
+      # 失败时把日志 + 中间产物一起留下，方便本地复现
+      - name: 失败现场打包
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "== 失败的 commit: $GITHUB_SHA"
+            echo "== 事件: $GITHUB_EVENT_NAME / $GITHUB_REF"
+          } > failure-context.txt
+          tar czf build-failure.tar.gz build.log build-info.txt failure-context.txt build 2>/dev/null \
+            || tar czf build-failure.tar.gz build.log build-info.txt failure-context.txt 2>/dev/null || true
+          ls -l build-failure.tar.gz 2>&1 || true
 
       - name: 上传 APK
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: zybclean-apk
           path: zybclean.apk
           if-no-files-found: error
+          retention-days: 30
+
+      - name: 上传日志（总是）
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: |
+            build.log
+            build-info.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 上传失败现场（失败时）
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-failure
+          path: |
+            build-failure.tar.gz
+            build-info.txt
+            failure-context.txt
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: 发布 Release（打 tag 时）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: zybclean.apk
+          generate_release_notes: true
