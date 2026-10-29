@@ -28,6 +28,14 @@ public class HomeChromeKiller {
     private static final long[] DELAYS = {600L, 1500L, 3000L, 6000L, 12000L};
     private static final int GONE = 8;
 
+    /**
+     * 首页「垃圾卡片」——按可见文字定位（id 全混淆成 zyb，只能靠文字）。
+     * 命中后向上找卡片容器（ConstraintLayout 且够高）整块 GONE。
+     */
+    private static final String[] JUNK_TEXTS = {
+            "绑定作业帮APP账号",   // 账号推广卡：立即绑定 / 随时了解孩子学习进度
+    };
+
     public static void install(final ClassLoader cl) {
         try {
             Class<?> index = XposedHelpers.findClass(INDEX, cl);
@@ -86,6 +94,8 @@ public class HomeChromeKiller {
     }
 
     private static void clean(Object root) {
+        hideJunkCards(root);
+
         List<Object> marquees = new ArrayList<Object>();
         List<Object> stateIcons = new ArrayList<Object>();
         collect(root, marquees, stateIcons, 0);
@@ -145,6 +155,78 @@ public class HomeChromeKiller {
             }
             collect(child, marquees, stateIcons, depth + 1);
         }
+    }
+
+    /** 首页「垃圾卡片」：文字命中 JUNK_TEXTS 就整卡隐藏。 */
+    private static void hideJunkCards(Object root) {
+        List<Object> texts = new ArrayList<Object>();
+        collectText(root, texts, 0);
+        int hidden = 0;
+        for (Object tv : texts) {
+            String s = textOf(tv);
+            if (s == null || !isJunk(s)) continue;
+            Object card = findCard(tv);
+            if (card != null) {
+                hide(card);
+                hidden++;
+            }
+        }
+        if (hidden > 0) {
+            HookEntry.log("HomeChromeKiller: hide " + hidden + " junk card(s)");
+        }
+    }
+
+    private static boolean isJunk(String text) {
+        for (String key : JUNK_TEXTS) {
+            if (text.contains(key)) return true;
+        }
+        return false;
+    }
+
+    /** 从文字节点往上找卡片容器：ConstraintLayout 且高度 ≥ 300px。 */
+    private static Object findCard(Object textView) {
+        Object cur = textView;
+        for (int i = 0; i < 6; i++) {
+            Object parent;
+            try {
+                parent = XposedHelpers.callMethod(cur, "getParent");
+            } catch (Throwable t) {
+                return null;
+            }
+            if (parent == null) break;
+            cur = parent;
+            if (cur.getClass().getSimpleName().contains("ConstraintLayout") && intOf(cur, "getHeight") >= 300) {
+                return cur;
+            }
+        }
+        try {
+            return XposedHelpers.callMethod(textView, "getParent");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static void collectText(Object v, List<Object> out, int depth) {
+        if (v == null || depth > 60) return;
+        if (v.getClass().getSimpleName().endsWith("TextView")) out.add(v);
+        int n = intOf(v, "getChildCount");
+        for (int i = 0; i < n; i++) {
+            Object child = null;
+            try {
+                child = XposedHelpers.callMethod(v, "getChildAt", Integer.valueOf(i));
+            } catch (Throwable ignored) {
+            }
+            collectText(child, out, depth + 1);
+        }
+    }
+
+    private static String textOf(Object view) {
+        try {
+            Object t = XposedHelpers.callMethod(view, "getText");
+            if (t != null) return t.toString().trim();
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     private static void collectByName(Object v, String simpleName, List<Object> out, int depth) {
