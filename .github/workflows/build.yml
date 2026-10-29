@@ -66,11 +66,14 @@ jobs:
           unzip -q -o "$zip" -d "$SDK_DIR/platforms"
           ls -l "$SDK_DIR/platforms"/*/android.jar
           jar="$SDK_DIR/platforms/android-34/android.jar"
+          # 注意：Debian/Ubuntu 的 aapt(1) 只认文件名恰为 AndroidManifest.xml 的 -M 参数，
+          # 用 smoke.xml 会报 "No AndroidManifest.xml file found"。
+          mkdir -p "$RUNNER_TEMP/jarcheck"
           printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' \
             '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="smoke.test">' \
             '<uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" /></manifest>' \
-            > "$RUNNER_TEMP/smoke.xml"
-          aapt package -f -M "$RUNNER_TEMP/smoke.xml" -I "$jar" -F "$RUNNER_TEMP/smoke.apk"
+            > "$RUNNER_TEMP/jarcheck/AndroidManifest.xml"
+          aapt package -f -M "$RUNNER_TEMP/jarcheck/AndroidManifest.xml" -I "$jar" -F "$RUNNER_TEMP/jarcheck/smoke.apk"
           echo SMOKE_OK
 
       - name: 编译
@@ -90,7 +93,8 @@ jobs:
             echo "== tools"; aapt version 2>&1 | head -2; apksigner --version 2>&1 | head -2
             echo "== 产物"; ls -l zybclean.apk 2>&1
             echo "== build 目录"; find build -maxdepth 2 2>/dev/null | head -50
-          } > build-info.txt
+          } > build-info.txt || true
+          cat build-info.txt
 
       # 失败时把日志 + 中间产物一起留下，方便本地复现
       - name: 失败现场打包
