@@ -372,3 +372,55 @@ rsh realme 'am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init
   2. 新增 `pickActivity()`：从后往前找 `hasWindowFocus()==true` 的 Activity，找不到回落 `sActivity`；
   3. 触发线程改用 `pickActivity()`。
 - 下一步：`./build.sh` → `./deploy.sh` → 请用户停在首页 → `rsh realme 'touch .../.zyb_snap'` → scp 出 dump，定位搜索框/铃铛/红角标。
+
+## 17. 2026-10-30 00:55 —— 关键结论：结果页是 H5；新增 HomeChromeKiller / WebKiller；**停止 SSH 手机**
+
+### 旧约束（用户明确，必须遵守）
+- 用户原话：「然后快照和其他文件存到tmp以外都安全目录，你慢慢研究，把Xposed包打包好，从现在开始，不允许再ssh我的手机。」
+- 即：**以后不再 `rsh realme`**；一切产物落在仓库内（`~/zuoyebang_xposed/analysis/` 等），不写 /tmp；模块只能在本地/CI 打包，由用户自己安装验证。
+- 仍在生效：不主动把作业帮拉前台、不截图打扰用户。
+
+### 决定性发现：搜题结果页是 WebView 渲染的 H5
+`analysis/snap4.txt`（Snap 快照，`NewV2PicManySearchActivity`，158 views）：
+- `SearchResultPager` 下两个 `FrameLayout`，各自装 `NestedHybridWebView` → `WebViewDelegate`；
+- 全文件**没有** `SNAP overlay#` 行 → 「讲解中」浮卡不是 WindowManager 浮层；
+- 顶部 tab 用 `TopicV2NumberIndicator`（`1` / `2`），底部 `AISearchBottomInputView`（含 `再拍一页 / 分享 / 加错题本 / 问小帮`、`AISearchEditText`）。
+→ 「AI 解题」tab 与「讲解中」视频浮卡都在网页 DOM 里，**dex 里必然搜不到**（之前白找的原因）。只能注入 JS。
+
+### 首页 View 树（`analysis/snap3.txt`，272 views，`IndexActivity`）
+- 标题栏：`RelativeLayout(1119,280-2154,448)` → 搜索框容器 `RelativeLayout(1119,301-1860,427)`（内含 `XMarqueeView` 跑马灯热词「英语翻译器/等比数列前n项和公式…」）；同级右侧 `RelativeLayout(1119,280-2140,448)` → `StateImageView(1916,322-2000,406)` 铃铛 + `StateImageView(2056,322-2140,406)` 扫码 + 2× `BadgeTextView`（红点）。
+- 所有资源 id 都被混淆成同一个名字 `zyb` → **只能按控件类名 + 兄弟顺序 + 坐标定位**。
+- 相关 FQN（`grep analysis/classes.txt` 得到）：
+  - `com.zuoyebang.design.badge.BadgeTextView`（唯一）
+  - `com.zuoyebang.adx.widget.XMarqueeView` 与 `com.zybang.imp.widget.view.XMarqueeView`（同名两个，按 simpleName 匹配即可）
+  - `com.zybang.parent.widget.StateImageView`、`com.baidu.homework.activity.more.StateImageView`
+  - `NestedHybridWebView` 有 4 个实现，统一 hook `android.webkit.WebView` 覆盖
+
+### 新增 `src/com/sql916/zybclean/HomeChromeKiller.java`
+- hook `IndexActivity#onCreate` / `onResume` → 600/1500/3000/6000/12000ms 五次在 decor 上遍历 View 树：
+  - 找到 `XMarqueeView` → 隐藏其**父容器**（搜索框，不会连带右侧图标）；
+  - 找到所有 `StateImageView` → 隐藏**最左边**那个（铃铛），右边扫码保留；
+  - 树上所有 `BadgeTextView` 直接 GONE。
+- 另 hook `com.zuoyebang.design.badge.BadgeTextView#setVisibility`，before 把参数强改为 `8`（GONE）→ 后创建的角标也压住。
+
+### 新增 `src/com/sql916/zybclean/WebKiller.java`
+- hook `android.webkit.WebView#loadUrl` / `#loadDataWithBaseURL` afterHook → `postDelayed` 1200/3000/6000/12000ms → `evaluateJavascript(JS, null)`。
+- 注入脚本（幂等，`window.__zybclean` 标记）：
+  - 文本等于 `AI解题 / AI 解题 / AI讲题 / AI 讲题` 的节点 → 隐藏（优先 `closest('li')`，否则父节点）；
+  - 文本含「讲解」→ 向上 8 层找 `position: fixed|sticky` 的祖先并隐藏（即「讲解中」浮卡）；
+  - `MutationObserver` + 1.5s 定时扫描，应对 SPA 动态插入。
+
+### `HookEntry` 安装顺序（当前）
+AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller → **HomeChromeKiller** → **WebKiller** → `all hooks installed`。
+`Snap` / `WebEyes` 已注释掉（不再 SSH，探针无意义；需要时打开再打包）。
+
+### 产物
+- `./build.sh` → `BUILD_OK`，`zybclean.apk` = **29,079 B**（classes.dex 41,740 B），签名 CN=zybclean，SHA-256 `7139e2df…b3d80`（与本机历史/CI 一致，可覆盖安装）。
+- 校验：`unzip -p zybclean.apk classes.dex | grep -c` → `AI解题`=2、`讲解`=1、`HomeChromeKiller|WebKiller` 命中 23 处、`com.zuoyebang.design.badge.BadgeTextView` 存在。
+- **未在设备验证**（用户禁止 SSH）→ 需用户自行安装：`adb install -r`/文件管理器点开，LSPosed 作用域已含 `com.zuoyebang.knowledge`（之前已写进 lspd DB）。
+
+### 仍未验证/待办
+1. `HomeChromeKiller` 的「最左边 StateImageView = 铃铛」是**按快照坐标推断**的，若顺序反了会误删扫码——用户反馈后再调。
+2. `WebKiller` 的 JS 规则基于文本匹配，可能与页面实际结构不符；若无效需要真实 DOM（可再打开 `WebEyes` 探针，但那需要 SSH，暂不可用）——用户可截图反馈。
+3. 开屏提速（`InitActivity` K0/L0 → y0 → IndexActivity）仍未实现。
+4. 「绑定作业帮APP账号」推广卡未处理（`snap3.txt` 里是 `LinearLayout(1179-1484)` 下的第一个 `ConstraintLayout vis=V`）。

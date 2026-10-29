@@ -48,10 +48,18 @@ public class HookEntry implements IXposedHookLoadPackage {
         // try { Probe.install(cl); } catch (Throwable t) { log("Probe install failed: " + t); }
         // try { ViewDump.install(cl); } catch (Throwable t) { log("ViewDump install failed: " + t); }
         try {
-            Snap.install(cl);
+            HomeChromeKiller.install(cl);
         } catch (Throwable t) {
-            log("Snap install failed: " + t);
+            log("HomeChromeKiller install failed: " + t);
         }
+        try {
+            WebKiller.install(cl);
+        } catch (Throwable t) {
+            log("WebKiller install failed: " + t);
+        }
+        // 探针：需要现场取证时再打开（触发文件 .zyb_snap / .zyb_web，写在 App 私有目录）
+        // try { Snap.install(cl); } catch (Throwable t) { log("Snap install failed: " + t); }
+        // try { WebEyes.install(cl); } catch (Throwable t) { log("WebEyes install failed: " + t); }
         log("all hooks installed");
     }
 
