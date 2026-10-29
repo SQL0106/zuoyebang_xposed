@@ -57,6 +57,11 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("WebKiller install failed: " + t);
         }
+        try {
+            FastStart.install(cl);
+        } catch (Throwable t) {
+            log("FastStart install failed: " + t);
+        }
         // 探针：需要现场取证时再打开（触发文件 .zyb_snap / .zyb_web，写在 App 私有目录）
         // try { Snap.install(cl); } catch (Throwable t) { log("Snap install failed: " + t); }
         // try { WebEyes.install(cl); } catch (Throwable t) { log("WebEyes install failed: " + t); }

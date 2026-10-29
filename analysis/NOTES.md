@@ -424,3 +424,35 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 2. `WebKiller` 的 JS 规则基于文本匹配，可能与页面实际结构不符；若无效需要真实 DOM（可再打开 `WebEyes` 探针，但那需要 SSH，暂不可用）——用户可截图反馈。
 3. 开屏提速（`InitActivity` K0/L0 → y0 → IndexActivity）仍未实现。
 4. 「绑定作业帮APP账号」推广卡未处理（`snap3.txt` 里是 `LinearLayout(1179-1484)` 下的第一个 `ConstraintLayout vis=V`）。
+
+---
+
+## 18. 2026-10-30 01:05 —— 停止 SSH 后的离线迭代
+
+用户新约束（原话）：「快照和其他文件存到tmp以外都安全目录，你慢慢研究，把Xposed包打包好，从现在开始，不允许再ssh我的手机。」
+→ **不再 ssh / rsh 到手机**；产物全落仓库内 `analysis/`；APK 只能本地 / GitHub Actions 打包；安装与验证交给用户。
+
+### 18.1 HomeChromeKiller 增加「按文字删卡片」
+- 新增 `JUNK_TEXTS = {"绑定作业帮APP账号"}`（首页账号推广卡）。id 全混淆成 `zyb`，只能靠文字。
+- `clean()` 里先跑 `hideJunkCards(root)`：收集所有 TextView → `textOf()` 命中关键词 → `findCard()` 向上最多 6 层找「ConstraintLayout 且高度 ≥300」的卡片容器 → `setVisibility(8)`；找不到就退化为隐藏直接父级。
+- 顶部三件套逻辑不变：`XMarqueeView` 父容器（搜索框）GONE、最左 `StateImageView`（铃铛）GONE、所有 `BadgeTextView` GONE（外加 hook `BadgeTextView#setVisibility` 强改 8）。
+
+### 18.2 新增 FastStart（开屏提速）
+- 静态分析结论：`InitActivity.init()` → `A0()`（含 `com/baidu/homework/ads/b.h`，疑似广告闸门）→ 延时体 `L0()/K0()` → `y0()` → `IndexActivity.createIntent`；开屏慢主要是这段延时 + 广告等待。
+- 实现：hook `android.os.Handler#postDelayed`（beforeHook）——参数为 `(Runnable, Long)`、`delay > 800ms`、Runnable 类名含 `InitActivity` 或 `Splash` 时，把 delay 改成 `250ms`；日志最多 20 条。`ENABLED=true` 一键开关。
+- 安装顺序（当前）：AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller → HomeChromeKiller → WebKiller → **FastStart**；Snap/Probe/ViewDump/WebEyes 注释保留。
+
+### 18.3 CI（GitHub Actions）踩坑记录
+1. `aapt: Entry offset ... outside the Type's boundaries` → CI 里 sdkmanager 装的 `platforms;android-34` 的 `android.jar` 与本机 Debian aapt 不兼容。改为**直接下官方 `platform-34-ext7_r02.zip`**（与本机同源），并缓存 zip（key `platform-34-ext7_r02-zip-v1`）。
+2. **Debian/Ubuntu 的 `aapt`(1:14~beta1-3) 的 `-M` 参数强制要求文件名就叫 `AndroidManifest.xml`**，写 `smoke.xml` 会报 `ERROR: No AndroidManifest.xml file found.`（本机 build.sh 与 workflow 都踩了同一个坑，均已改为 `.../jarcheck/AndroidManifest.xml`）。
+3. 「编译信息」步骤用 `if: always()` 但对 `aapt version`/`ls` 加的 `-e` 会让整步 exit 2 → 改用 `|| true`。
+4. `build.sh` 的 `jar_ok()` 不再只看体积（≥20MB），而是真跑一次 `aapt package -M <smoke>/AndroidManifest.xml -I <jar> -F <apk>` 冒烟，通过才算可用。
+
+### 18.4 产物
+- `./build.sh` → BUILD_OK，`zybclean.apk` 29,079 B，classes.dex 42,776 B（含 FastStart + junk card 代码），签名 SHA-256 `7139e2df…b3d80` 不变（可覆盖安装）。
+
+### 18.5 待验证（只能靠用户手动）
+1. 首页：搜索框 / 铃铛 / 红点 / 绑定账号推广卡是否都没了；扫码是否还在（若铃铛扫码顺序反了会误删扫码）。
+2. 结果页：AI 解题 tab、「讲解中」浮卡是否被 WebKiller 的 JS 压掉。
+3. 开屏是否变快（FastStart 是否命中 InitActivity 的延时 Runnable）。
+4. 科普专区（FeedKiller.killForever）是否彻底消失。
