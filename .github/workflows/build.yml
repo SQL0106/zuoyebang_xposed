@@ -41,7 +41,7 @@ jobs:
           path: |
             ${{ env.SDK_DIR }}/platforms
             ${{ env.SDK_DIR }}/build-tools
-          key: ${{ runner.os }}-androidsdk-p34-bt34-v1
+          key: ${{ runner.os }}-androidsdk-p34-bt34-v2
           restore-keys: |
             ${{ runner.os }}-androidsdk-p34-
 
@@ -50,14 +50,20 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends aapt zipalign apksigner
 
-      - name: 安装 Android SDK platform（缓存命中则跳过下载）
+      - name: 校验/修复 Android SDK platform
         run: |
-          if [ -f "$SDK_DIR/platforms/android-34/android.jar" ]; then
-            echo "android.jar 已在缓存中，跳过"
+          JAR="$SDK_DIR/platforms/android-34/android.jar"
+          size="$(stat -c%s "$JAR" 2>/dev/null || echo 0)"
+          echo "android.jar = $JAR ($size bytes)"
+          if [ "$size" -ge 20000000 ]; then
+            echo "android.jar 可用（缓存命中），跳过下载"
           else
+            echo "android.jar 缺失或被截断（$size bytes），重新安装 platforms;android-34"
+            rm -rf "$SDK_DIR/platforms/android-34"
             yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
             "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34"
           fi
+          ls -l "$SDK_DIR/platforms"/*/android.jar
           cat "$SDK_DIR/platforms/android-34/source.properties" 2>/dev/null || true
 
       - name: 编译

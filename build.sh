@@ -7,7 +7,19 @@ cd "$(dirname "$0")"
 
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/android-sdk/sdk}}"
 BT="$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)"
-JAR="$(ls "$SDK"/platforms/*/android.jar 2>/dev/null | sort -V | tail -1 || true)"
+
+# android.jar 必须完整（正常 20MB+）。CI 缓存里可能是被截断的半成品，跳过它们。
+jar_ok() {
+  [ -f "$1" ] || return 1
+  local size
+  size="$(stat -c%s "$1" 2>/dev/null || echo 0)"
+  [ "$size" -ge 20000000 ]
+}
+JAR=""
+for cand in $(ls "$SDK"/platforms/*/android.jar 2>/dev/null | sort -V -r); do
+  if jar_ok "$cand"; then JAR="$cand"; break; fi
+  echo "跳过不完整的 android.jar: $cand ($(stat -c%s "$cand" 2>/dev/null || echo 0) bytes)" >&2
+done
 
 # 找一个能真正跑起来的可执行文件：先系统命令，再 SDK build-tools
 pick() {
@@ -41,7 +53,7 @@ else
   echo "d8/r8.jar 未找到"; exit 1
 fi
 
-echo "SDK=$SDK"; echo "android.jar=$JAR"; echo "aapt=$AAPT"; echo "zipalign=$ZIPALIGN"; echo "apksigner=$APKSIGNER"
+echo "SDK=$SDK"; echo "android.jar=$JAR ($(stat -c%s "$JAR") bytes)"; echo "aapt=$AAPT ($("$AAPT" version 2>&1 | head -1))"; echo "zipalign=$ZIPALIGN"; echo "apksigner=$APKSIGNER"
 
 rm -rf build out.apk
 mkdir -p build/classes build/stubs build/dex build/pkg
