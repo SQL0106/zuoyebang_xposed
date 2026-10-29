@@ -244,3 +244,63 @@ rsh realme 'am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init
 - 去掉 `h.m.c.f.m` 的无效 hook（abstract）以消除报错噪音。
 - 运行时确认：首页是否真的空/无广告、开屏是否卡住、`doShowAD` 是否在首屏后被调用（日志暂无运行时拦截记录，可能是启动 10s 内未触发）。
 - 弹窗 12 个子类目前是「全拦（`e(Activity)` beforeHook 直接 setResult(null)）」——需确认没有误伤必要弹窗（如协议/升级/登录）。
+
+---
+
+## 13. v2 生效确认 + Git 仓库/CI（2026-10-30 00:35）
+
+### v2 改动与验证
+- `FeedKiller.HIDE_SIMPLE_NAMES` 增加 `"EHPFeedsListAdapter"`（首页信息流整列表隐藏）；`AdBlocker` 删除 `h.m.c.f.m`（接口，abstract hook 报错噪音）。
+- `./build.sh` → 16,791 B；`./deploy.sh` → `pm install -r` Success。
+- 启动后日志（`/data/adb/lspd/log/verbose_2026-10-30T00:25:39.919863.log`）确认：
+  - `AdBlocker installed on 33/33 adapters`、`ad item types = [1, 2, 3]`、3 条 `feed filter installed`、`ActivityBlocker installed`
+  - `skip ApiSplashAdapter.doLoadAD`
+  - `block popup: com.baidu.homework.activity.index.dialog.{o,s,p,t,q,i,l,k,n}`
+  - `setAdapter ... <- EHPFeedsListAdapter` → **`hide RecyclerView with EHPFeedsListAdapter`**（命中，信息流已隐藏）
+  - 首页其它 adapter 正常放行：`DFunctionAreasGridAdapter`、`DFunctionAreasPagerAdapter`、`DHeaderImpAdapter`、`EHomeSubPagerAdapter`
+
+### git / CI（用户要求）
+- 仓库：`git@github.com:SQL0106/zuoyebang_xposed.git`（public），本地 `~/zuoyebang_xposed`，分支 main。
+- 忽略：`base.apk`、`zybclean.apk`、`build/`、`analysis/*.{png,raw,txt,log,db}`、`*.idsig`、`libs/api-82.jar`；**`zybclean.keystore` 故意入库**（口令 zybclean），保证 CI 与本机签名一致、可覆盖安装。
+- `build.sh` 已改为可移植：`SDK=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/android-sdk/sdk}}`，android.jar 用 `platforms/*/android.jar` 排序取最新，d8 用 `cmdline-tools/*/lib/r8.jar`（回退 build-tools d8.jar），aapt/zipalign/apksigner 先找系统命令再找 build-tools，全部打印路径。
+- `.github/workflows/build.yml`（ubuntu-latest, JDK 17）：
+  - `concurrency` 取消旧构建；`timeout-minutes: 20`；`permissions.contents: write`
+  - 步骤：定位 SDK → **actions/cache 缓存 `$SDK/platforms` + `$SDK/build-tools`（key `*-androidsdk-p34-bt34-v1`）** → apt 装 aapt/zipalign/apksigner → 缓存命中则跳过 sdkmanager 下载 → `./build.sh 2>&1 | tee build.log`
+  - **失败保留现场**：`if: failure()` 打 `build-failure.tar.gz`（build.log + build-info.txt + failure-context.txt + build/ 中间产物）并上传 artifact `build-failure`(30 天)；`build-logs` artifact 总是上传（14 天）
+  - 成功上传 `zybclean-apk`；`v*` tag 用 softprops/action-gh-release 发版
+- 两次 commit 已 push：`c30d13c` 初始模块、`b235150` CI 优化。
+
+### 用户反馈（重要）
+- 「为什么总是要看作业帮」→ **不要反复把作业帮拉到前台截图**，会打断用户用手机；验证一律走 `/data/adb/lspd/log/verbose_*.log` 的 `ZYBCLEAN` 行，必要时再请用户自己看手机屏幕确认。
+- 之前 c.png 截到的是用户当时的 Via+opencode 界面，说明启动确实发生且 hook 生效，但截图不可靠。
+
+### 剩余待办
+- 删除「绑定作业帮APP账号 / 100 立刻绑定」推广卡（位置在首页 `DHeaderImpAdapter` 区）。
+- 需要时再收「垃圾」入口（商城优惠券、学币充值、家长付费、Test/Debug）。自动化测试：真机手动确认首屏。
+
+---
+
+## 14. v3 目标：删「视频讲解小窗」（滚动到底部自动出现的浮窗）
+
+用户原话：「视频讲解小窗删掉」+ 补充「就是滑到下方，自动出现一个浮窗」。
+
+### 已排除
+- `com.zuoyebang.homework.video.clip.widget.VideoTabFloatView`（悬浮球，`showFloatView/tryShowFloatView/hideFloatView/animateToHalfHide/isTodayEnable`）——调用者只有 `ShortVideoTabFragment`（短视频 tab 内部），与首页滚动无关。
+- `VideoViewManager`（`com.zybang.sdk.player.base.videoview`）只是 VideoView 缓存池。
+- 字符串 `%小窗%/%悬浮%/%画中画%` 只命中「悬浮窗搜题」等无关项。
+- `%视频讲解%` 只有一条（`TabUserFragmentVipCardsHelper.e` 的会员权益文案）。
+
+### 命中候选（待确认后 hook）
+- **`com.baidu.homework.activity.index.HomePageFloatView`**（+ 内部类 `$scrollListener$2`、`$scrollListener$2$1`、`$a..$k`）→ 名字与「首页浮窗 + 滚动监听」完全吻合，极可能就是目标。**下一步：decode 该类，找 `show`/`onScroll` 入口并 hook 成不显示（或 setVisibility 8 / removeView）。**
+- 另有 `com.lzf.easyfloat.*`（EasyFloat 悬浮窗库，未混淆）可作备选拦截层：拦 `EasyFloat.show(...)`。
+
+### 静态分析工具备注
+- `dexsql query` 的 `method_calls` 表扁平列：`method`、`method_class`、`method_name`、`callee`、`callee_class`、`callee_name`、`file_id`、`class_idx`、`method_idx`、`callee_method_idx`（**没有 caller_method_id / callee_class_descriptor**）。
+- `method_strings` 扁平列：`method`、`method_class`、`method_name`、`value`、`file_id`、`class_idx`、`method_idx`、`string_idx`。
+- `methods` 列：`class_descriptor`、`name`、`descriptor`、`return_descriptor`、`param_count`、`param_descriptors`、`access_flags`、`opcode_count`。
+- 中间产物：`analysis/video_pkg.txt`(340)、`analysis/video_all.txt`(1346)、`analysis/float_candidates.txt`(113)。
+
+### v3 部署状态
+- `./build.sh` → BUILD_OK（classes.dex 17,688 B，含 FloatKiller）；`./deploy.sh` → `pm install -r` Success / INSTALLED（2026-10-30 约 01:0x）。
+- 运行时待确认：启动后 verbose log 应出现 `FloatKiller installed on N methods of HomePageFloatView`；用户下滑首页应无浮窗。
+- 教训：用户反感被反复拉前台，验证交给用户或读日志。

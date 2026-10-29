@@ -39,6 +39,11 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("DialogKiller install failed: " + t);
         }
+        try {
+            FloatKiller.install(cl);
+        } catch (Throwable t) {
+            log("FloatKiller install failed: " + t);
+        }
         log("all hooks installed");
     }
 
