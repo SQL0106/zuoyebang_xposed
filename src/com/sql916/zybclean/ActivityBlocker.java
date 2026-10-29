@@ -12,6 +12,8 @@ public class ActivityBlocker {
     /** 精确类名黑名单。 */
     private static final String[] EXACT = {
             "com.baidu.homework.ads.advertise.AdResumeSplashActivity",
+            // AI 解题页：用户明确不需要
+            "com.baidu.homework.activity.search.newsearchv3.ai.ResultAiActivity",
             "com.fastad.api.reward.RewardAd1Activity",
             "com.fastad.api.reward.RewardAd2Activity",
             "com.fastad.api.reward.RewardAd3Activity",

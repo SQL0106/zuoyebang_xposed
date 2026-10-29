@@ -44,6 +44,11 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("FloatKiller install failed: " + t);
         }
+        try {
+            Probe.install(cl);
+        } catch (Throwable t) {
+            log("Probe install failed: " + t);
+        }
         log("all hooks installed");
     }
 

@@ -304,3 +304,31 @@ rsh realme 'am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init
 - `./build.sh` → BUILD_OK（classes.dex 17,688 B，含 FloatKiller）；`./deploy.sh` → `pm install -r` Success / INSTALLED（2026-10-30 约 01:0x）。
 - 运行时待确认：启动后 verbose log 应出现 `FloatKiller installed on N methods of HomePageFloatView`；用户下滑首页应无浮窗。
 - 教训：用户反感被反复拉前台，验证交给用户或读日志。
+
+---
+
+## 15. FloatKiller 无效 —— 浮窗其实在「搜题结果页」（v4）
+
+- 部署后用户实测：「还是有这个恶心的浮窗」，截图显示浮窗出现在**拍照搜题结果页**（顶部相机照，底部弹出面板，tab `结果1 / AI解题 / 结果3 / 结果4`，底部按钮「分享 / 加错题本 / 问小帮 / 再拍一页」），右下角一张**视频讲解小卡**：红色角标「讲解中」+ 视频预览图 + 右上角关闭 X，滚动时自动出现。
+  → **`com.baidu.homework.activity.index.HomePageFloatView` 是首页的运营浮球，不是这个**。FloatKiller 保留无害（首页浮球也不弹了）。
+- 已查字符串：
+  - `%讲解中%` → 只有 `com.zybang.parent.view.GameLoadingProgressView.upadteProgress`（"准备讲解中..."/"准备讲解中...100%"）。
+  - 其它 `%讲解%` 命中：`"正在使用非WI-FI网络，下载讲解（"`、一大段老师评价 JSON（沙*咧 等）。**没有「讲解中」角标文案的字符串** → 角标是图片资源或服务端下发。
+- 已排查（无结果）：`activity/search/**` 里没有 Video/Player/Float/Window 类；`%Explain%` 只剩 ExplainLabelContainer(搜索页标签)、parent 的 ExplainGetpkginfo(讲解包下载)；`%Suspend%/%MiniWindow%/%SmallWindow%` 未见相关；`com.zybang.parent.*` 无 Float/Video/Mini 类。
+- 页面确认为 `com.baidu.homework.activity.search.SearchResultActivity` + `search/core/SearchResultPager(Adapter)` + `search/newsearchv3/**`（有 `ai/AIInputSugAdapter`，AI解题 tab）。
+- 下一步方向（按优先级）：
+  1. 反编译/静态定位 `SearchResultActivity`、`SearchResultPager`、`SearchResultPagerAdapter` 的子页 Fragment（`a`..`g` 七个内部类可能就是 结果1/AI解题/结果3/结果4 页），看谁持有一个「视频讲解」View。
+  2. 找资源 id：`aapt dump resources base.apk | grep -i -E 'explain|video'` 找布局/角标资源，再反查 `R.id` 常量使用方。
+  3. 运行时探针：hook `Activity#onCreate` 打印所有 Activity 类名 + hook `Fragment#onViewCreated` 打印 Fragment 类名 → 让用户复现一次（不主动拉前台，等用户自己滑），从 verbose log 读到真实类。
+  4. 兜底：hook `android.view.WindowManager#addView`（type 为 `TYPE_APPLICATION_PANEL/SUB_PANEL/TYPE_PHONE` 的浮层）或 `PopupWindow#showAsDropDown/#showAtLocation` 统一拦截，慎用（可能误伤下拉菜单/Toast）。
+
+### v4 补充：AI解题入口已定位，浮窗仍未定位（需运行时探针）
+- 用户新指令（原话）：「AI解题也干掉，根本不会用的东西。」
+- **AI 解题入口 = `com.baidu.homework.activity.search.newsearchv3.ai.ResultAiActivity`**（`createIntent` 静态工厂 + `onCreate`；进入方：`ai/e0.onClick`（tab 点击）、`AISearchBottomInputView.jumpToXbAiPage`）。→ 加进 ActivityBlocker 黑名单（finish）即可让该 tab 点了不生效。
+- `search/newsearchv3/ai/` 包另有 `AISearchBottomInputView`、`BaseAiContainerView`、`AISearchEditText`、`AIInputSugAdapter`、`AiConfigModel`。
+- 浮窗仍未定位：
+  - `activity/search/**` 里唯一继承 `RecyclerView$OnScrollListener` 的是 `newsearchv3/ai/AISearchBottomInputView$3`（与浮窗无关）。
+  - 无 `VideoCard/ExplainCard/VideoSuspend` 类（仅 `ADXListVideoCardCountdownItem`、`RadiusCardView`）。
+  - `com/zuoyebang/homework/video/clip` 下有 `databinding/FloatViewVideoTabBinding`、`widget/RadiusCardView`、`player/ShortVideoView` 等，但都是短视频 tab 用的。
+  - `activity/search/**` 无 %视频%/%讲解% 字符串（服务端下发）。
+- 结论：**需运行时探针** —— 在 `Activity#onCreate` 打 Activity 类名、`Fragment#onViewCreated` 打 Fragment 类名、`ViewGroup#addView` 仅对 `com.zuoyebang/com.baidu/com.zybang` 包的 View 打类名（限 80 条/进程），让用户自己复现一次（拍照搜题→下滑），再从 verbose log 找真实类名。
