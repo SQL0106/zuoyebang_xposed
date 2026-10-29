@@ -33,7 +33,9 @@ rm -rf build out.apk
 mkdir -p build/classes build/stubs build/dex build/pkg build/jarcheck
 
 # 冒烟清单：用来验证 android.jar 能不能被 aapt 真正解析
-cat > build/jarcheck/smoke.xml <<'XML'
+# 注意：Debian 的 aapt(1) 只认文件名恰为 AndroidManifest.xml 的清单，随便取名会报
+#       ERROR: No AndroidManifest.xml file found.，所以这里就叫 AndroidManifest.xml
+cat > build/jarcheck/AndroidManifest.xml <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="smoke.test">
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
@@ -47,7 +49,7 @@ jar_ok() {
   [ -f "$jar" ] || return 1
   size="$(stat -c%s "$jar" 2>/dev/null || echo 0)"
   [ "$size" -ge 20000000 ] || return 1
-  "$AAPT" package -f -M build/jarcheck/smoke.xml -I "$jar" -F build/jarcheck/smoke.apk >/dev/null 2>&1
+  "$AAPT" package -f -M build/jarcheck/AndroidManifest.xml -I "$jar" -F build/jarcheck/smoke.apk >/dev/null 2>&1
 }
 
 JAR=""
