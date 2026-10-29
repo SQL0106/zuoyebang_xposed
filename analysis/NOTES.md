@@ -332,3 +332,26 @@ rsh realme 'am start -n com.zuoyebang.knowledge/com.baidu.homework.activity.init
   - `com/zuoyebang/homework/video/clip` 下有 `databinding/FloatViewVideoTabBinding`、`widget/RadiusCardView`、`player/ShortVideoView` 等，但都是短视频 tab 用的。
   - `activity/search/**` 无 %视频%/%讲解% 字符串（服务端下发）。
 - 结论：**需运行时探针** —— 在 `Activity#onCreate` 打 Activity 类名、`Fragment#onViewCreated` 打 Fragment 类名、`ViewGroup#addView` 仅对 `com.zuoyebang/com.baidu/com.zybang` 包的 View 打类名（限 80 条/进程），让用户自己复现一次（拍照搜题→下滑），再从 verbose log 找真实类名。
+
+### v4 代码改动（已部署 b082d4b）
+- `ActivityBlocker.EXACT` 增加 `com.baidu.homework.activity.search.newsearchv3.ai.ResultAiActivity`（AI解题页 onCreate 后 finish）。
+- 新增 `src/com/sql916/zybclean/Probe.java` 探针（临时，定位浮卡用），HookEntry 里在 FloatKiller 之后 install：
+  - `Activity#onCreate` → `probe activity: <类名>`（预算 150/进程）
+  - `ViewGroup#addView` → 只对 `com.zuoyebang./com.baidu.homework./com.zybang./com.homework.` 开头或类名含 Video/Float/Explain 的 View 打 `probe addView: <子View> <- <父容器>`（预算 400/进程）
+  - `Fragment#onViewCreated`（androidx + android.app） → `probe fragment: <类名>`
+- 构建/安装：`./build.sh` BUILD_OK + `./deploy.sh` INSTALLED；`unzip -p zybclean.apk classes.dex | strings` 能看到 `probe addView`、`ResultAiActivity`、`HomePageFloatView`。
+- APK 大小仍是 16,791 B（dex 变大、zip 对齐后总大小巧合不变，已用 strings 核实内容已更新）。
+
+### v5（已部署，2026-10-30 00:45）—— 科普专区硬杀 + 首页 View 树探针
+1. **科普专区硬杀**：`FeedKiller.killForever(cl, "com.baidu.homework.activity.newhomepage.e_home.adapter.EHPFeedsListAdapter")`
+   - 遍历 `getDeclaredMethods()`：凡「单参且参数是 List」的方法 → before 把 `args[0]` 换成空 `ArrayList`（打到 `feed emptied at <方法名>`）；`getItemCount()I` → before `setResult(0)`。
+   - 原因：单靠 `setAdapter` 后 `setVisibility(8)` 会被后续显隐逻辑覆盖（日志里 `hide RecyclerView` 出现 4 次但页面照显）。
+2. **新增 `src/com/sql916/zybclean/ViewDump.java`**（临时探针，定位完删）：
+   - `hookHome`：hook `com.baidu.homework.activity.index.IndexActivity#onCreate` afterHook → 对 decorView `postDelayed(runnable, 5000)` 和 `12000` 各 dump 一次整棵 View 树，行前缀 `viewdump `，内容 = 缩进 + `view.getClass().getSimpleName()` + `id=<资源名去包前缀>`（`Resources.getResourceName(id)`）+ `vis=` + `宽x高` + `desc=`（contentDescription）；`MAX_LINES=220`。
+   - `hookOverlay`：hook `android.view.WindowManagerGlobal#addView`，只对包名前缀 `com.zuoyebang/com.baidu/com.zybang/com.homework` 的 View 打 `overlay addView: <类名> type=<LayoutParams.type>`，预算 40 条。**用于抓不经 ViewGroup#addView 的 WindowManager 浮层**（「讲解中」浮卡可能属于这类）。
+   - `HookEntry` 里在 Probe 之后 `try { ViewDump.install(cl); } catch ...`。
+3. 已 `./build.sh`（BUILD_OK，`zybclean.apk` 20,887 B）+ `./deploy.sh`（Success/INSTALLED）。
+4. **资源名反查失败**：`aapt dump resources base.apk > analysis/res.txt`（4.1 MB）里搜 `notice|bell|xiaoxi|unread` **0 命中** → 资源名被混淆，通知铃铛只能靠 ViewDump 运行时拿 id。
+5. 静态补充：
+   - `NewVideoRemindersLayout`（`activity/user/widget/`）方法：3 个 `<init>(Context[,...])` 65537、`init(Context)`、`initView(Context)`、`setGlideVisibility(I)`、`setVisibility(I)` — 它是 `activity/user` 学习记录页的「视频提醒」卡，未必是搜题页浮卡。
+   - `grep 'activity/search/.*(Video|Clip|Player|Suspend|Float|Mini)'` 与 `newsearchv3` 内 `video|player|float|card` 均 **0 命中** → 搜题结果页没有视频相关类 → 浮卡很可能是 WindowManager 浮层或跨包复用组件。

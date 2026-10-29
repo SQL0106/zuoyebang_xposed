@@ -75,9 +75,51 @@ public class FeedKiller {
             HookEntry.log("feed filter installed: " + name);
         }
 
+        // 首页「科普专区」硬杀：光隐藏 RecyclerView 会被后续的显隐逻辑覆盖（实测页面仍显示），
+        // 改为数据层清零 + itemCount 直接返回 0，让列表天然没有内容。
+        killForever(cl, "com.baidu.homework.activity.newhomepage.e_home.adapter.EHPFeedsListAdapter");
+
         hookAdapterHost(cl, "androidx.recyclerview.widget.RecyclerView");
         hookAdapterHost(cl, "androidx.viewpager.widget.ViewPager");
         hookAdapterHost(cl, "androidx.viewpager2.widget.ViewPager2");
+    }
+
+    /** 彻底清空某个 feed adapter：装数据的方法收到空 List，getItemCount 恒为 0。 */
+    private static void killForever(ClassLoader cl, String className) {
+        Class<?> c;
+        try {
+            c = Class.forName(className, false, cl);
+        } catch (Throwable t) {
+            HookEntry.log("killForever: not found " + className);
+            return;
+        }
+        int hooked = 0;
+        for (Method m : c.getDeclaredMethods()) {
+            Class<?>[] pt = m.getParameterTypes();
+            boolean takesList = pt.length == 1 && List.class.isAssignableFrom(pt[0]);
+            boolean isCount = pt.length == 0 && "getItemCount".equals(m.getName())
+                    && m.getReturnType() == int.class;
+            if (!takesList && !isCount) continue;
+            final boolean count = isCount;
+            try {
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (count) {
+                            param.setResult(0);
+                        } else {
+                            param.args[0] = new ArrayList<>();
+                            HookEntry.log("feed emptied at " + param.method.getName());
+                        }
+                    }
+                });
+                hooked++;
+            } catch (Throwable t) {
+                HookEntry.log("killForever hook failed: " + m.getName(), t);
+            }
+        }
+        HookEntry.log("killForever " + className.substring(className.lastIndexOf('.') + 1)
+                + " on " + hooked + " methods");
     }
 
     /** 隐藏 banner 类 adapter 所在的容器。 */

@@ -49,6 +49,11 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("Probe install failed: " + t);
         }
+        try {
+            ViewDump.install(cl);
+        } catch (Throwable t) {
+            log("ViewDump install failed: " + t);
+        }
         log("all hooks installed");
     }
 
