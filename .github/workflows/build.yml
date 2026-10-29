@@ -33,38 +33,45 @@ jobs:
           echo "SDK_DIR=$SDK" >> "$GITHUB_ENV"
           echo "SDK_DIR=$SDK"
 
-      # android.jar 与 r8.jar 体积大、下载慢，缓存 platforms/build-tools
-      - name: 缓存 Android SDK 组件
-        id: sdk-cache
+      # platform zip 63MB，缓存下来省下载；解压后体积大、没必要缓存解压结果
+      - name: 缓存 platform zip
         uses: actions/cache@v4
         with:
-          path: |
-            ${{ env.SDK_DIR }}/platforms
-            ${{ env.SDK_DIR }}/build-tools
-          key: ${{ runner.os }}-androidsdk-p34-bt34-v2
-          restore-keys: |
-            ${{ runner.os }}-androidsdk-p34-
+          path: ~/android-platform-zip
+          key: platform-34-ext7_r02-zip-v1
 
       - name: 安装打包工具（apt 缓存到 runner 自带镜像）
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends aapt zipalign apksigner
 
-      - name: 校验/修复 Android SDK platform
+      # 不用 sdkmanager：它装出来的 android.jar 在 Debian/Ubuntu 的 aapt 下会报
+      # "Entry offset at index N points outside the Type's boundaries"。
+      # 直接下与本机完全一致的官方 zip，并用 aapt 做冒烟链接验证。
+      - name: 准备 Android platform（官方 zip + 冒烟验证）
+        env:
+          PLATFORM_ZIP: platform-34-ext7_r02.zip
         run: |
-          JAR="$SDK_DIR/platforms/android-34/android.jar"
-          size="$(stat -c%s "$JAR" 2>/dev/null || echo 0)"
-          echo "android.jar = $JAR ($size bytes)"
-          if [ "$size" -ge 20000000 ]; then
-            echo "android.jar 可用（缓存命中），跳过下载"
-          else
-            echo "android.jar 缺失或被截断（$size bytes），重新安装 platforms;android-34"
-            rm -rf "$SDK_DIR/platforms/android-34"
-            yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-            "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34"
+          set -euo pipefail
+          zip_dir="$HOME/android-platform-zip"
+          mkdir -p "$zip_dir"
+          zip="$zip_dir/$PLATFORM_ZIP"
+          if ! unzip -tq "$zip" >/dev/null 2>&1; then
+            echo "下载 $PLATFORM_ZIP"
+            curl -sSL --retry 5 --retry-delay 3 -o "$zip" "https://dl.google.com/android/repository/$PLATFORM_ZIP"
           fi
+          unzip -t "$zip" | tail -2
+          rm -rf "$SDK_DIR/platforms/android-34"
+          mkdir -p "$SDK_DIR/platforms"
+          unzip -q -o "$zip" -d "$SDK_DIR/platforms"
           ls -l "$SDK_DIR/platforms"/*/android.jar
-          cat "$SDK_DIR/platforms/android-34/source.properties" 2>/dev/null || true
+          jar="$SDK_DIR/platforms/android-34/android.jar"
+          printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' \
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="smoke.test">' \
+            '<uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" /></manifest>' \
+            > "$RUNNER_TEMP/smoke.xml"
+          aapt package -f -M "$RUNNER_TEMP/smoke.xml" -I "$jar" -F "$RUNNER_TEMP/smoke.apk"
+          echo SMOKE_OK
 
       - name: 编译
         shell: bash
