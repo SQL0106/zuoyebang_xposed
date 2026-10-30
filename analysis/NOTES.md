@@ -476,3 +476,31 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
   - 结果：**XposedBot 拒绝并关闭**——包名不合法，要求 `io.github.sql0106.[appname]` 这类前缀（或自有域名加 TXT `lsposed-modules-repo-verification=SQL0106`）。
   - → 要进 LSPosed 仓库必须把包名从 `com.sql916.zybclean` 改成 `io.github.sql0106.zybclean`；改包名 = 新模块身份，用户需卸载旧包 + 重新在 LSPosed 勾选作用域（无管理器的设备要改 DB → 需重启一次，由用户决定）。**是否改名待用户拍板。**
 - 通用经验已抽到 **`~/XPOSED-DEV-NOTES.md`**（8 章：流程/静态分析/运行时探针/无 Gradle 构建/LSPosed 启用/CI/LSPosed 仓库发布要求/协作纪律 + 复用清单），与 App 无关，可套用到别的 App 与新模块。
+
+## 21. 2026-10-30 09:2x —— 包名改名落地、Release 2-1.0.1、README 精简、重新提交 LSPosed
+
+用户指令链：「调整仓库信息，转开源，然后声明llm生成，上传lsp仓库（如果可以的话），然后再总结经验，经验放home」→「不要写太多乱七八糟的东西和历史到readme，然后写好测试版本，com.zuoyebang.knowledge，14.34.0(1738)」→「把旧版release删掉」。
+
+### 包名改名（commit `2191f2e`，已 push）
+- `com.sql916.zybclean` → **`io.github.sql0106.zybclean`**；源码目录 `src/io/github/sql0106/zybclean/`（13 个 .java）；`assets/xposed_init`、`AndroidManifest.xml`、`enable_module.sh` 默认值、README 目录树全部同步。
+- 版本 `versionCode=2` / `versionName=1.0.1`。dex 内 `io/github/sql0106` 出现 43 次、`com/sql916` 0 次（已校验）。
+- 构建 `BUILD_OK`：`zybclean.apk` 29,079 B，签名 CN=zybclean，SHA-256 `7139e2dfe49a8887d0a3e2db0d8fb94e454e68f145f55cd2923b9d85eb3b3d80`（与旧版一致，keystore 未变）。
+
+### README 精简（commit 已 push）
+- 按用户「不要写太多乱七八糟的东西和历史」重写：删掉重复的安装段落（原来 49–59 行有重复块且含 typo `com.zuoyebang.knledge`）与历史叙述；只留：徽章 + LLM 声明块 + **适配版本 `com.zuoyebang.knowledge` 14.34.0 (1738)** + 功能表 + 下载 / 安装 / 编译 / 日志 / 目录 / 关键认知。历史与踩坑留在 `analysis/EXPERIENCE.md`、`~/XPOSED-DEV-NOTES.md`。
+
+### Release
+- 删除旧 Release **`1-1.0`**（`gh release delete 1-1.0 --yes --cleanup-tag`，tag 一并删）。
+- 新建 Release **`2-1.0.1`**（title `1.0.1`），附 `zybclean.apk`，说明含「包名变更，升级前先卸载旧包」；`gh release edit --draft=false` 报 422（已在 publish 中），最终 `gh release view` 确认 `draft:false`、`assets:[zybclean.apk]`，URL https://github.com/SQL0106/zuoyebang_xposed/releases/tag/2-1.0.1
+
+### LSPosed 仓库重新提交
+- `Xposed-Modules-Repo/submission` issue **#2357**，标题 `[submission] io.github.sql0106.zybclean`，body 存本地 `analysis/submission_body.md`（模块名/源仓/Release/目标包与版本/minSdk/LLM 生成说明）。结果待 XposedBot 回复。
+
+### 经验归位
+- `~/XPOSED-DEV-NOTES.md` §八 复用清单里的旧路径 `src/com/sql916/zybclean/Snap.java` 已 sed 成 `src/io/github/sql0106/zybclean/Snap.java`（首页第 6 行、§2.2 说明、复用表三处均在）。
+- `~/AGENTS.md` §十一 已有指路行。
+
+### 手机侧（用户自己做）
+1. 卸载旧 `com.sql916.zybclean`；
+2. 装 `io.github.sql0106.zybclean`（包名变了 = 新模块）；
+3. LSPosed 里给新模块勾 `com.zuoyebang.knowledge`（无管理器设备改 DB 后需重启一次，由用户决定）。
