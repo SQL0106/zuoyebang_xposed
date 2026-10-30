@@ -91,7 +91,8 @@ GKD 是外部无障碍服务，Xposed 模块内没有它对控件树的访问入
 - 配置库：`/data/adb/lspd/config/modules_config.db`，表
   `modules(module_pkg_name PK, apk_path)` / `modules_state(module_pkg_name, user_id, enabled, scope_request_blocked)` / `scope(module_pkg_name, app_pkg_name, user_id)`。
 - 设备无 sqlite3 → 拉到本机用 `sqlite3` 改（`PRAGMA journal_mode=DELETE` 后 `INSERT ... ON CONFLICT`），推回后 `chown root:root`、删 `-wal`/`-shm`。
-- **改完必须重启手机**：`kill lspd` 后无论 `nohup` / `setsid` / 子 shell 都拉不起来（`lspd` 本体是 `exec app_process ... org.lsposed.lspd.Main`，静默退出）。
+- **改配置库不需要重启手机**（用户 2026-10-30 明确）：作用域里只有普通 App 时，LSPosed 在目标 App 下次启动时读配置即生效，`am force-stop 目标包` 足够。只有作用域包含 **「系统框架」** 时才必须重启。
+- **绝对不要 `kill lspd`**：一旦杀掉就无法手动拉起（`nohup` / `setsid` / 子 shell 全静默退出，`lspd` 本体是 `exec app_process ... org.lsposed.lspd.Main`）——历史上那次「必须重启」是我们自己 kill 出来的，不是 LSPosed 的要求。
 - `lspctl` CLI 在本机全静默（rc=0、零输出），不可用；`org.lsposed.manager` 装了也没法自动化 UI（`uiautomator dump` 在这台设备上静默失败）——**用户明确反对装管理器，不要再装**。
 - 模块 APK 更新**不需要**重启手机、不需要改库：`pm install -r` 后 `am force-stop 目标包`，下次启动即加载新代码。
 
@@ -112,7 +113,7 @@ GKD 是外部无障碍服务，Xposed 模块内没有它对控件树的访问入
 3. 断点式推进：每改一版 → 构建 → 安装 → **读日志确认 hook 命中** → 再改下一处。不要一次改十处再验证。
 4. 「断言已做/未做」之前先读文件（`NOTES.md` / `git log`），别凭印象。
 5. 每次重大结论立刻写进 `NOTES.md`（用户明确要求「记得经常写md，在压缩之前写进去」）。
-6. **绝不擅自重启手机**（用户 2026-10-30 指令：「不能随意重启手机，测试让用户做」）。LSPosed 只在装机/改库时**才**需要重启，且必须由用户决定；日常模块迭代只 `pm install -r` + `am force-stop 目标包` 即可。
+6. **绝不擅自重启手机**（用户 2026-10-30 指令：「不能随意重启手机，测试让用户做」）。常规启用/更新都不需要重启：勾作用域（普通 App）或 `pm install -r` 后，`am force-stop 目标包` 即可；**只有作用域含系统框架时才需重启**，且由用户决定。
 7. **测试一律交给用户**：装完就停，不自己开 App、不滑页面、不读用户界面；等功能确认由用户回话后再按需读日志定位。
 
 ---

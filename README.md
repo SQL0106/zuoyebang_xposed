@@ -35,7 +35,9 @@ LSPosed 模块，用来给作业帮去广告、去信息流、去推广与无关
 1. 安装 APK，在 LSPosed 里勾选作用域 `com.zuoyebang.knowledge`。
 2. 强制停止作业帮，重新打开。
 
-设备上没有 LSPosed 管理 App 时（例如 realme + Zygisk 版 LSPosed），用 `./enable_module.sh` 直接写 LSPosed 配置库，**首次需重启手机**。之后模块更新只要 `pm install -r` + `am force-stop com.zuoyebang.knowledge`，不必重启。
+设备上没有 LSPosed 管理 App 时（例如 realme + Zygisk 版 LSPosed），用 `./enable_module.sh` 直接写 LSPosed 配置库。
+
+**都不需要重启手机**：作用域里只有普通 App 时，配置在目标 App 下次启动时生效。只有把「系统框架」勾进作用域才必须重启。注意别去 `kill lspd`——它被杀后无法手动拉起，那才真的只能重启。
 
 ## 编译
 

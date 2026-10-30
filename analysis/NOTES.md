@@ -510,3 +510,11 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 - 已推 `SUMMARY`（一行：作业帮净化：去广告、去首页信息流与科普专区、去推广卡与红点、屏蔽 AI 解题与讲解浮窗、开屏提速）+ `README.md`（功能列表 + 指回源码仓 + LLM 声明 + MIT），分支 `main`，**未放源码**（本地克隆在 `~/lsp-submissions/io.github.sql0106.zybclean`）。
 - 已在**官方仓库**发布 Release `2-1.0.1`（附 `zybclean.apk`）：https://github.com/Xposed-Modules-Repo/io.github.sql0106.zybclean/releases/tag/2-1.0.1
 - **未完成（必须人工在网页做）**：仓库 description = 模块显示名，`gh repo edit` 与 `gh api -X PATCH repos/...` 均返回 **404**（MAINTAIN 权限不允许改描述，bot 明确要求网页操作）。建议填写：「作业帮净化：去广告、去信息流与科普专区、去推广红点、屏蔽 AI 解题与讲解浮窗、开屏提速（适配 14.34.0）」。填完 60 分钟内会出现在 LSPosed 管理器/官网。
+
+## 22. 2026-10-30 —— 更正：启用模块/改配置库都不需要重启手机（用户指正）
+
+用户原话：「我自己启用模块，只要作用阈没有系统框架就不需要重启。」
+
+- **正确认知**：作用域只勾普通 App（如 `com.zuoyebang.knowledge`）时，LSPosed 在目标 App 下次启动读配置即生效 → `am force-stop 目标包` 就够。**只有作用域包含「系统框架」才必须重启**。
+- 历史教训是**我们自己 kill lspd 造成的**：`lspd` 被杀后无法手动拉起（`nohup`/`setsid`/子 shell 全静默退出），才被迫重启手机。**永远不要 kill lspd。**
+- 已同步修正：`enable_module.sh`（删掉「停 lspd / 重启 lspd」两步，改为推库 → 删 wal/shm → `am force-stop 目标包`，头注释写明不重启）、`README.md` 安装节、`analysis/EXPERIENCE.md` §四 + 协作纪律第 6 条、`~/XPOSED-DEV-NOTES.md` §4。
