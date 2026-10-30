@@ -456,3 +456,12 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 2. 结果页：AI 解题 tab、「讲解中」浮卡是否被 WebKiller 的 JS 压掉。
 3. 开屏是否变快（FastStart 是否命中 InitActivity 的延时 Runnable）。
 4. 科普专区（FeedKiller.killForever）是否彻底消失。
+
+## 19. 2026-10-30 01:20 —— 铁律：不擅自重启手机，测试交给用户
+
+用户原话：「记住，不能随意重启手机，测试让用户做」
+
+- **不重启**：LSPosed 只在「首次装机 / 改 modules_config.db」时才需要重启，且由用户决定；日常模块迭代只需 `pm install -r` + `am force-stop com.zuoyebang.knowledge`。
+- **测试归用户**：装完即停。不自己 `am start` 作业帮、不滑页面、不截图、不反复读界面；只按用户回话（"好了/还是不行"）再决定读日志还是改代码。
+- 同步写入 `analysis/EXPERIENCE.md` §六（协作纪律 6/7 条）。
+- 当前未验证项（等用户自测）：HomeChromeKiller（搜索框/铃铛/红点/绑定账号卡）、WebKiller（H5 里 AI解题 tab 与讲解浮卡）、FastStart（开屏提速）、FeedKiller 科普专区清零。
