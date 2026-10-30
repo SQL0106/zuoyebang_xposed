@@ -518,3 +518,44 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 - **正确认知**：作用域只勾普通 App（如 `com.zuoyebang.knowledge`）时，LSPosed 在目标 App 下次启动读配置即生效 → `am force-stop 目标包` 就够。**只有作用域包含「系统框架」才必须重启**。
 - 历史教训是**我们自己 kill lspd 造成的**：`lspd` 被杀后无法手动拉起（`nohup`/`setsid`/子 shell 全静默退出），才被迫重启手机。**永远不要 kill lspd。**
 - 已同步修正：`enable_module.sh`（删掉「停 lspd / 重启 lspd」两步，改为推库 → 删 wal/shm → `am force-stop 目标包`，头注释写明不重启）、`README.md` 安装节、`analysis/EXPERIENCE.md` §四 + 协作纪律第 6 条、`~/XPOSED-DEV-NOTES.md` §4。
+
+## 23. 2026-10-30 —— 迁移到 libxposed API 102（用户要求：作用域自声明 + 用新 API）
+
+用户原话：「我自己启用模块，只要作用阈没有系统框架就不需要重启。你牛大了，作用阈不设置吗？而且还不用新的102api。」
+
+### 为什么换 API
+- legacy API（`de.robv.android.xposed`）**不能声明作用域**，必须用户手动在管理器里勾；旧方案还得靠改 lspd 的 sqlite。
+- libxposed API 102（`io.github.libxposed:api:102.0.0`）支持包内声明 `scope.list`、`staticScope=true` → 装上启用即自动生效。
+
+### 获取 API jar
+- Maven 上没有独立 jar，只有 aar：`https://repo1.maven.org/maven2/io/github/libxposed/api/102.0.0/api-102.0.0.aar` → 解出 `classes.jar` 改名 `libs/libxposed-api-102.jar`（17,065 B 级别，20K 实占）。中间产物（aar / sources / 解包目录）已 gitignore。
+
+### 新骨架（与 legacy 的差异）
+| 项 | legacy | API 102 |
+|---|---|---|
+| 入口 | `IXposedHookLoadPackage` | `extends XposedModule`，回调 `onModuleLoaded(ModuleLoadedParam)` / `onPackageLoaded(PackageLoadedParam)` |
+| hook | `findAndHookMethod` / `hookAllMethods` | `hook(Executable).intercept(Hooker)`，`Chain.getThisObject/getArgs()List/proceed(Object[])` |
+| 取 ClassLoader | `lpparam.classLoader` | `param.getDefaultClassLoader()` |
+| 日志 | `XposedBridge.log` | `log(int priority, String tag, String msg)` |
+| 声明 | `assets/xposed_init` + Manifest 的 xposed* meta-data | `META-INF/xposed/{java_init.list, scope.list, module.prop}` |
+| 作用域 | 用户手勾 | `scope.list` + `module.prop staticScope=true` |
+
+- `module.prop` 内容：`minApiVersion=102 / targetApiVersion=102 / staticScope=true / exceptionMode=protective / autoHotReload=false`。
+- `AndroidManifest.xml` 里 **xposed* meta-data 全部删掉**（新 API 不读），改用 `android:label/@string:app_name` 与 `android:description/@string:xposed_description`；`res/values/strings.xml` 提供两条文案。
+
+### 迁移做法：compat 层（关键决策）
+13 个 killer 一行逻辑没改，只把 `import de.robv.android.xposed.*` 换成 `io.github.sql0106.zybclean.compat.*`：
+- `compat/XC_MethodHook.java`：保留 `beforeHookedMethod/afterHookedMethod(MethodHookParam)` 与 `setResult/getResult/hasResult/getThrowable/setThrowable` 语义，`invokeBefore/invokeAfter` 由桥接层调用。
+- `compat/XposedBridge.java`：`bind(XposedInterface)`（`onModuleLoaded` 里绑）；`hookMethod` → `hook((Executable)m).setExceptionMode(PROTECTIVE).intercept(BridgeHooker)`；`BridgeHooker.intercept` 组装 param → before → `proceed(args)` → after，异常时 `setThrowable` 后仍走 after。
+- `compat/XposedHelpers.java`：`findClass`（**抛 RuntimeException 而非受检异常**，否则 `Snap.install` 编译不过）/`callMethod`/`getIntField`/`getObjectField`/`getStaticIntField`，全部自实现反射。
+- 教训：`compat.findClass` 若声明 `throws ClassNotFoundException`，所有调用点（探针）都要改，成本高；运行时失败打成 RuntimeException 由外层 try-catch 兜住更省事。
+
+### 打包变化（build.sh）
+- javac 不再编 stub，改 `-cp libs/libxposed-api-102.jar`；D8 加 `--lib libxposed-api-102.jar`。
+- aapt 用 `-S res`（不再 `-A assets`）；合包时 `cp -r module/META-INF` 进去，**删掉 `assets/xposed_init`**（旧入口会被新 API 忽略，留着只是噪音）。
+- 产物：`zybclean.apk` **33,392 B**，classes.dex 50,284 B，`aapt dump badging` = `io.github.sql0106.zybclean` **1.1.0 (3)**，`unzip -l` 含 `META-INF/xposed/{module.prop,scope.list,java_init.list}`，dex 内 `io/github/libxposed` 命中 9、`zybclean/compat` 命中 5。签名仍是 CN=zybclean / SHA-256 `7139e2df…b3d80`。
+
+### 仓库清理
+- 删 `libs/stubs`（legacy 编译期 stub 已无用）、删 `assets/xposed_init`。
+- `.gitignore` 追加 `libs/api102/`、`libs/api102src/`、`libs/api-102.aar`、`libs/api-102-sources.jar`（只保留 `libs/libxposed-api-102.jar`）。
+- commit `57ff71c`「feat!: 迁移到 libxposed API 102…」，已 push。

@@ -141,3 +141,17 @@ HookEntry（仅 com.zuoyebang.knowledge）
 - 真正的「讲解中」卡片 DOM 未知（需要 `WebEyes` 在结果页 dump 一次 DOM 才能写精确规则）。
 - 开屏到底慢在哪：`InitActivity` 的跳转由 `L0/K0` 触发，`FastStart` 只是压延时，未验证是否真的提前进首页。
 - 「科普专区」在数据层清零后是否彻底消失，未在真机确认。
+
+## 九、libxposed API 102（当前正式方案）
+
+**不要再用 legacy `de.robv.android.xposed`。** 新项目直接按下面这套起步：
+
+- 依赖：`libxposed:api:102.0.0` 只有 aar，从 Maven 拉 `api-102.0.0.aar` 解出 `classes.jar` 当编译期 jar（仓库里存成 `libs/libxposed-api-102.jar`）。
+- 入口：`class HookEntry extends XposedModule`，覆写 `onModuleLoaded(ModuleLoadedParam)`（拿 `XposedInterface`，可 `log(4,TAG,msg)`）与 `onPackageLoaded(PackageLoadedParam)`（`getPackageName()` / `getDefaultClassLoader()`）。
+- Hook：`hook((Executable) method).setExceptionMode(ExceptionMode.PROTECTIVE).intercept(Hooker)`；`Chain` 提供 `getThisObject()` / `getArgs()`(List) / `proceed(Object[])` / `getExecutable()`。想「跳过原方法」就在 before 阶段直接 return 一个值，不再 proceed。
+- **门面/兼容层最好用**：把 `XC_MethodHook` 那套语义（before/after + `setResult`）用 ~120 行 compat 类桥接到 `Hooker`，历史模块的 killer 一行不用改，只 sed import。
+- **作用域自声明**（本次用户明确要求）：包内 `META-INF/xposed/scope.list`（每行一个包名）+ `module.prop` 的 `staticScope=true`；LSPosed 安装后自动带作用域，用户启用即生效。
+- `META-INF/xposed/module.prop`：`minApiVersion=102`、`targetApiVersion=102`、`staticScope=true`、`exceptionMode=protective`、`autoHotReload=false`。
+- **不再需要** `assets/xposed_init` 与 Manifest 里的 `xposedmodule/xposeddescription/xposedminversion` meta-data；模块名与描述改从 `res/values/strings.xml` + `android:label`/`android:description` 来。
+- 打包：javac/D8 都要 `-cp`/`--lib` 指向 API jar；aapt 用 `-S res`；合包时把 `module/META-INF` 拷进 APK 根。
+- 坑：`findClass` 这一类 helper 自己实现时**不要声明受检异常**，否则每个探针调用点都要 try-catch；失败抛 RuntimeException 让外层兜。
