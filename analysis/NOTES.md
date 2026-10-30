@@ -465,3 +465,14 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 - **测试归用户**：装完即停。不自己 `am start` 作业帮、不滑页面、不截图、不反复读界面；只按用户回话（"好了/还是不行"）再决定读日志还是改代码。
 - 同步写入 `analysis/EXPERIENCE.md` §六（协作纪律 6/7 条）。
 - 当前未验证项（等用户自测）：HomeChromeKiller（搜索框/铃铛/红点/绑定账号卡）、WebKiller（H5 里 AI解题 tab 与讲解浮卡）、FastStart（开屏提速）、FeedKiller 科普专区清零。
+
+## 20. 2026-10-30 —— 转开源、LLM 声明、LSPosed 模块仓库提交
+
+- 仓库元数据：`gh repo edit` 改描述（含「代码由 LLM 生成，MIT 开源」）+ topics `lsposed xposed android adblock zuoyebang llm-generated`；仓库本就 public。
+- 新增 `LICENSE`（MIT + 末尾「生成来源声明」中英双语）。
+- `README.md` 增加：build/license 徽章、「⚠️ 声明：本项目代码由 LLM 生成」（未经逐行审计、按现状提供、后果自担、与官方无关/不改原 APK/不收集数据）、`## 下载`（Releases / CI Artifacts）、`## 许可证与免责`。
+- 发布 Release **`1-1.0`**（tag 格式 `<versionCode>-<versionName>`，附 `zybclean.apk`），URL https://github.com/SQL0106/zuoyebang_xposed/releases/tag/1-1.0
+- LSPosed 官方模块仓库提交：`Xposed-Modules-Repo/submission` issue **#2356**（标题 `[submission] com.sql916.zybclean`）。
+  - 结果：**XposedBot 拒绝并关闭**——包名不合法，要求 `io.github.sql0106.[appname]` 这类前缀（或自有域名加 TXT `lsposed-modules-repo-verification=SQL0106`）。
+  - → 要进 LSPosed 仓库必须把包名从 `com.sql916.zybclean` 改成 `io.github.sql0106.zybclean`；改包名 = 新模块身份，用户需卸载旧包 + 重新在 LSPosed 勾选作用域（无管理器的设备要改 DB → 需重启一次，由用户决定）。**是否改名待用户拍板。**
+- 通用经验已抽到 **`~/XPOSED-DEV-NOTES.md`**（8 章：流程/静态分析/运行时探针/无 Gradle 构建/LSPosed 启用/CI/LSPosed 仓库发布要求/协作纪律 + 复用清单），与 App 无关，可套用到别的 App 与新模块。
