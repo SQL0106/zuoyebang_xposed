@@ -2,7 +2,7 @@
 # 不依赖 LSPosed 管理器，直接把模块写进 lspd 配置库并重启 lspd
 # 用法: ./enable_module.sh [包名]
 set -e
-PKG="${1:-com.sql916.zybclean}"
+PKG="${1:-io.github.sql0106.zybclean}"
 TARGET="com.zuoyebang.knowledge"
 DEV=realme
 TMP="$HOME/zuoyebang_xposed/analysis/lspd_live"

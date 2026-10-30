@@ -11,6 +11,8 @@
 > - 安装到设备即视为你自行承担一切后果（包括但不限于 App 崩溃、数据异常、需要重装系统）。
 > - 与作业帮 / 百度 / LSPosed 官方均无关；不含任何官方代码，不重打包原 APK，不收集、不上传任何用户数据。
 > - 代码以 [MIT](LICENSE) 协议开源，欢迎自行审计、修改、再分发。
+>
+> **包名变更（1.0.1 起）**：为符合 LSPosed 模块仓库的命名要求，模块包名由 `com.sql916.zybclean` 改为 `io.github.sql0106.zybclean`。升级方式：先卸载旧包（在 LSPosed 里会跟着掉作用域），装新包后重新勾选 `com.zuoyebang.knowledge`。
 
 LSPosed 模块，不重打包原 APK。功能：
 
@@ -50,6 +52,10 @@ LSPosed 模块，不重打包原 APK。功能：
 2. 强制停止作业帮后重新打开。
 
 没有 LSPosed 管理 App 的设备（realme RMX5062 就是这样），用 `./enable_module.sh` 直接改 LSPosed 配置库并**重启手机**生效。
+模块代码更新不需要重启手机：`pm install -r` 后 `am force-stop com.zuoyebang.knledge`。
+2. 强制停止作业帮后重新打开。
+
+没有 LSPosed 管理 App 的设备（realme RMX5062 就是这样），用 `./enable_module.sh` 直接改 LSPosed 配置库并**重启手机**生效。
 模块代码更新不需要重启手机：`pm install -r` 后 `am force-stop com.zuoyebang.knowledge` 即可。
 
 ## 日志
@@ -63,7 +69,7 @@ LSPosed 模块，不重打包原 APK。功能：
 ## 目录
 
 ```
-src/com/sql916/zybclean/    模块源码（HookEntry + 各 Killer + 探针）
+src/io/github/sql0106/zybclean/    模块源码（HookEntry + 各 Killer + 探针）
 libs/stubs/                 编译期 Xposed API stub（不进 dex）
 assets/xposed_init          模块入口类名
 AndroidManifest.xml         xposedmodule / xposeddescription / xposedminversion

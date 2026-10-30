@@ -1,4 +1,4 @@
-package com.sql916.zybclean;
+package io.github.sql0106.zybclean;
 
 import java.lang.reflect.Method;
 import java.util.LinkedHashSet;

@@ -1,4 +1,4 @@
-package com.sql916.zybclean;
+package io.github.sql0106.zybclean;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
