@@ -18,3 +18,9 @@ analysis/lspd_live/
 *.idsig
 analysis/*.log
 analysis/*.db
+
+# libxposed API 102 解包中间产物（只留 libs/libxposed-api-102.jar）
+libs/api102/
+libs/api102src/
+libs/api-102.aar
+libs/api-102-sources.jar

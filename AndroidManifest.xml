@@ -1,23 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.sql0106.zybclean"
-    android:versionCode="2"
-    android:versionName="1.0.1">
+    android:versionCode="3"
+    android:versionName="1.1.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
+    <!-- 现代 Xposed（libxposed API 101+）不再使用 xposed* meta-data：
+         模块名取 android:label、描述取 android:description，
+         作用域/入口/配置在 META-INF/xposed/{scope.list,java_init.list,module.prop}。 -->
     <application
         android:hasCode="true"
-        android:label="zybclean">
-
-        <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
-        <meta-data
-            android:name="xposeddescription"
-            android:value="作业帮净化：去广告、去首页信息流" />
-        <meta-data
-            android:name="xposedminversion"
-            android:value="53" />
-    </application>
+        android:label="@string/app_name"
+        android:description="@string/xposed_description" />
 </manifest>

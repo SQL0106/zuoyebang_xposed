@@ -75,22 +75,22 @@ echo "aapt=$AAPT ($("$AAPT" version 2>&1 | head -1))"
 echo "zipalign=$ZIPALIGN"
 echo "apksigner=$APKSIGNER"
 
-# 1. Xposed API stub（仅编译期，不进 dex）
-javac --release 8 -nowarn -d build/stubs $(find libs/stubs -name '*.java')
+# 1. 模块源码（libxposed API 102 仅编译期依赖，框架运行期提供）
+API_JAR="libs/libxposed-api-102.jar"
+[ -f "$API_JAR" ] || { echo "缺少 $API_JAR"; exit 1; }
+javac --release 8 -nowarn -d build/classes -cp "$API_JAR" $(find src -name '*.java')
 
-# 2. 模块源码
-javac --release 8 -nowarn -d build/classes -cp build/stubs $(find src -name '*.java')
-
-# 3. dex
-"${D8_CMD[@]}" --min-api 24 --release --lib "$JAR" \
+# 2. dex
+"${D8_CMD[@]}" --min-api 24 --release --lib "$JAR" --lib "$API_JAR" \
     --output build/dex $(find build/classes -name '*.class')
 
-# 4. 清单/资源（aapt1 同时把 assets/ 打进包里）
-"$AAPT" package -f -M AndroidManifest.xml -A assets -I "$JAR" -F build/base.apk
+# 3. 清单/资源
+"$AAPT" package -f -M AndroidManifest.xml -S res -I "$JAR" -F build/base.apk
 
-# 5. 合入 dex
+# 4. 合入 dex + 现代 Xposed 元数据（入口/作用域/配置）
 cp build/dex/classes.dex build/pkg/
-( cd build/pkg && zip -q -X ../base.apk classes.dex )
+cp -r module/META-INF build/pkg/
+( cd build/pkg && zip -q -X -r ../base.apk classes.dex META-INF )
 
 # 6. 对齐 + 签名
 "$ZIPALIGN" -f -p 4 build/base.apk build/aligned.apk

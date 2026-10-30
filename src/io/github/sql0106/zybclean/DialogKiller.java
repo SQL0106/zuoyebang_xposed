@@ -2,8 +2,8 @@ package io.github.sql0106.zybclean;
 
 import java.lang.reflect.Method;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
 
 /**
  * 干掉首页的任务弹窗体系（活动/红包/签到/广告等 12 种弹窗，混淆为

@@ -1,8 +1,8 @@
 package io.github.sql0106.zybclean;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
+import io.github.sql0106.zybclean.compat.XposedHelpers;
 
 /**
  * 直接掐死广告 Activity / 广告落地页。

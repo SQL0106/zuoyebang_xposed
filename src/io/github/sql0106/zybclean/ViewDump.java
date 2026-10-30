@@ -4,9 +4,9 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
+import io.github.sql0106.zybclean.compat.XposedHelpers;
 
 /**
  * 临时探针 2（定位完删掉）：

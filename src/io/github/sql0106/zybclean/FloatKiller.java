@@ -4,9 +4,9 @@ import java.lang.reflect.Method;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
+import io.github.sql0106.zybclean.compat.XposedHelpers;
 
 /**
  * 干掉首页「视频讲解」浮窗。

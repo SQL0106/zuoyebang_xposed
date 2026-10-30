@@ -1,7 +1,7 @@
 package io.github.sql0106.zybclean;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
 
 /**
  * 拦截作业帮自研广告聚合层 com.fastad 的 34 个适配器。

@@ -2,8 +2,8 @@ package io.github.sql0106.zybclean;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
 
 /**
  * 临时探针：只为定位「搜题结果页右下角视频讲解浮卡」到底是谁加进来的。

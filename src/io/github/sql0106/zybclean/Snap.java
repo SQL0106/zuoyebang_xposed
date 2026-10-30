@@ -5,9 +5,9 @@ import java.io.FileWriter;
 import java.util.ArrayList;
 import java.util.List;
 
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
+import io.github.sql0106.zybclean.compat.XposedHelpers;
 
 /**
  * 运行时「快照」探针（仿 GKD 的 snapshot + 选择器思路，当眼睛用）。

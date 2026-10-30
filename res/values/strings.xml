@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">作业帮净化</string>
+    <string name="xposed_description">去广告、去首页信息流与科普专区、去推广卡与红点、屏蔽 AI 解题与讲解浮窗、开屏提速（适配作业帮 14.34.0）</string>
+</resources>
