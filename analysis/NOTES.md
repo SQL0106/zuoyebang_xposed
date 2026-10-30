@@ -504,3 +504,9 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 1. 卸载旧 `com.sql916.zybclean`；
 2. 装 `io.github.sql0106.zybclean`（包名变了 = 新模块）；
 3. LSPosed 里给新模块勾 `com.zuoyebang.knowledge`（无管理器设备改 DB 后需重启一次，由用户决定）。
+
+### LSPosed 官方仓库：提交成功（issue #2357）
+- XposedBot 回复：已建 **https://github.com/Xposed-Modules-Repo/io.github.sql0106.zybclean**，邀请已接受（`viewerPermission=MAINTAIN`，`/user/repository_invitations` 已空 = 自动接受）。
+- 已推 `SUMMARY`（一行：作业帮净化：去广告、去首页信息流与科普专区、去推广卡与红点、屏蔽 AI 解题与讲解浮窗、开屏提速）+ `README.md`（功能列表 + 指回源码仓 + LLM 声明 + MIT），分支 `main`，**未放源码**（本地克隆在 `~/lsp-submissions/io.github.sql0106.zybclean`）。
+- 已在**官方仓库**发布 Release `2-1.0.1`（附 `zybclean.apk`）：https://github.com/Xposed-Modules-Repo/io.github.sql0106.zybclean/releases/tag/2-1.0.1
+- **未完成（必须人工在网页做）**：仓库 description = 模块显示名，`gh repo edit` 与 `gh api -X PATCH repos/...` 均返回 **404**（MAINTAIN 权限不允许改描述，bot 明确要求网页操作）。建议填写：「作业帮净化：去广告、去信息流与科普专区、去推广红点、屏蔽 AI 解题与讲解浮窗、开屏提速（适配 14.34.0）」。填完 60 分钟内会出现在 LSPosed 管理器/官网。
