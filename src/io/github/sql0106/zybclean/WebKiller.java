@@ -16,7 +16,8 @@ import java.util.WeakHashMap;
  * <ol>
  *   <li>干掉「AI解题 / AI讲题 / 问小帮」tab 与「讲解中」视频浮卡；</li>
  *   <li>解除页面的选中/复制限制（user-select + 事件拦截），让长按能直接选字复制；</li>
- *   <li>右下角挂两个悬浮按钮：<b>复制内容</b>（整页题目+解答文本进剪贴板）、
+ *   <li>右下角挂三个悬浮按钮：<b>复制内容</b>（整页题目+解答文本进剪贴板）、
+ *       <b>存长图</b>（原生滚动拼接整页截图，公式排版原样保留，见 {@link PageShot}）、
  *       <b>下载图片</b>（收集页面里所有可见图片，逐张存进相册 Pictures/zybclean）；</li>
  *   <li>MutationObserver + 定时扫描，应对 SPA 动态渲染。</li>
  * </ol>
@@ -69,11 +70,59 @@ public class WebKiller {
             + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){hide(p);break;}p=p.parentElement;}}"
             + "}}catch(e){}}"
             /* ---------- 3. 悬浮工具条 ---------- */
-            + "function pageText(){try{"
-            + "var b=document.body.cloneNode(true);"
-            + "var rm=b.querySelectorAll('#zyb-bar');for(var i=0;i<rm.length;i++)rm[i].remove();"
-            + "var t=(b.innerText||b.textContent||'').replace(/[ \\t]+$/gm,'').replace(/\\n{3,}/g,'\\n\\n').trim();"
-            + "return t.slice(0,200000);}catch(e){return '';}}"
+            /* 取正文：必须在“活”的 DOM 上走，cloneNode 的 innerText 会退化成 textContent，
+               把 <script> 内容和 display:none 的隐藏 tab 全带出来（用户实测过）。 */
+            + "var SKIP={SCRIPT:0,STYLE:1,NOSCRIPT:1,TEMPLATE:1,TEXTAREA:1,TITLE:1,IFRAME:1,HEAD:1,"
+            + "SVG:1,CANVAS:1,VIDEO:1,AUDIO:1,INPUT:1,SELECT:1,BUTTON:1};"
+            + "var BLOCK={DIV:1,P:1,SECTION:1,ARTICLE:1,LI:1,UL:1,OL:1,TR:1,TD:1,TH:1,TABLE:1,"
+            + "H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,BR:1,HR:1,DT:1,DD:1,PRE:1,BLOCKQUOTE:1,"
+            + "HEADER:1,FOOTER:1,MAIN:1,ASIDE:1,NAV:1,FIGURE:1,FIGCAPTION:1};"
+            + "var DROP={'本题精讲':1,'讲解中':1,'问小帮':1,'AI解题':1,'AI讲题':1,'AI答疑':1,"
+            + "'复制内容':1,'下载图片':1,'展开':1,'收起':1,'查看解析':1,'答案解析':0};"
+            + "function normTex(s){return String(s||'').replace(/\\s+/g,' ').trim();}"
+            + "function vis(e){try{var cs=getComputedStyle(e);"
+            + "if(cs.display==='none'||cs.visibility==='hidden'||cs.opacity==='0')return false;"
+            + "if(e.getAttribute&&e.getAttribute('aria-hidden')==='true')return false;"
+            + "var r=e.getBoundingClientRect();"
+            + "if(r.width<=0&&r.height<=0&&cs.position!=='fixed')return false;"
+            + "return true;}catch(x){return true;}}"
+            + "function imgTex(im){var ks=['data-latex','data-tex','alt','title','aria-label'];"
+            + "for(var i=0;i<ks.length;i++){var v=im.getAttribute(ks[i]);"
+            + "if(v&&v.replace(/\\s/g,'')){var s=v.trim();return /[\\\\^_{}]/.test(s)&&s.indexOf('$')<0?('$'+s+'$'):s;}}"
+            + "var s2=im.getAttribute('src')||'';"
+            + "var m=/[?&](?:tex|latex|formula|text)=([^&]+)/i.exec(s2);"
+            + "if(m){try{return '$'+decodeURIComponent(m[1])+'$';}catch(x){return '';}}"
+            + "return '';}"
+            + "function mathTex(e){var a=e.querySelector&&e.querySelector('annotation[encoding=\"application/x-tex\"]');"
+            + "if(a&&a.textContent)return normTex(a.textContent);"
+            + "var at=e.getAttribute&&e.getAttribute('alttext');if(at)return normTex(at);"
+            + "var ml=e.querySelector&&e.querySelector('.katex-mathml');if(ml)return normTex(ml.textContent);"
+            + "return '';}"
+            + "var FC=0;"
+            + "function walk(e,out,d){if(!e||d>90||out.length>60000)return;"
+            + "var tag=e.tagName?e.tagName.toUpperCase():'';"
+            + "if(tag==='SCRIPT'){var ty=e.getAttribute?e.getAttribute('type')||'':'';"
+            + "if(ty.indexOf('math/tex')===0){var st=normTex(e.textContent);"
+            + "if(st){out.push('$'+st+'$');FC++;}}return;}"
+            + "if(SKIP[tag]||e.id==='zyb-bar')return;"
+            + "if(tag==='IMG'){var it=imgTex(e);if(it)out.push(it);return;}"
+            + "var cls=(typeof e.className==='string')?e.className:'';"
+            + "if(tag==='MJX-CONTAINER'||tag==='MATH'||/katex|mathjax|mjx-/i.test(cls)){"
+            + "var mt=mathTex(e);if(!mt)mt=normTex(e.textContent);"
+            + "if(mt){out.push('$'+mt+'$');FC++;}return;}"
+            + "if(e.nodeType===3){var tx=e.nodeValue;"
+            + "if(tx&&tx.replace(/\\s/g,'')){if(vis(e.parentNode||e))out.push(tx);}return;}"
+            + "if(!vis(e))return;"
+            + "var n=e.childNodes?e.childNodes.length:0;"
+            + "for(var i=0;i<n;i++)walk(e.childNodes[i],out,d+1);"
+            + "if(BLOCK[tag])out.push('\\n');}"
+            + "function pageText(){try{FC=0;var out=[];walk(document.body,out,0);"
+            + "var s=out.join('').replace(/\\r/g,'').replace(/[ \\t\\u00a0]+/g,' ');"
+            + "s=s.replace(/ *\\n */g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim();"
+            + "var lines=s.split('\\n'),keep=[];"
+            + "for(var i=0;i<lines.length;i++){var L=lines[i].replace(/\\s/g,'');"
+            + "if(!L)continue;if(DROP[L])continue;keep.push(lines[i]);}"
+            + "return keep.join('\\n').slice(0,200000);}catch(e){return '';}}"
             + "function legacyCopy(t){var ta=document.createElement('textarea');ta.value=t;"
             + "ta.style.cssText='position:fixed;left:-9999px;top:0;';document.body.appendChild(ta);"
             + "try{ta.select();document.execCommand('copy');toast('已复制');}catch(e){toast('复制失败');}"
@@ -117,6 +166,8 @@ public class WebKiller {
             + "background:'+color+';user-select:none;';"
             + "b.addEventListener('click',function(e){e.stopPropagation();e.preventDefault();fn();},true);return b;}"
             + "bar.appendChild(mk('复制内容','#3b82f6',copyAll));"
+            + "bar.appendChild(mk('存长图','#f59e0b',function(){var h=H();"
+            + "if(h&&h.shot){toast('生成中…');h.shot();}else{toast('桥未就绪');}}));"
             + "bar.appendChild(mk('下载图片','#10b981',function(){downloadAll();}));"
             + "document.body.appendChild(bar);}"
             + "function gate(){var bar=document.getElementById('zyb-bar');if(!bar)return;"
@@ -208,7 +259,7 @@ public class WebKiller {
         try {
             Object ctx = XposedHelpers.callMethod(webView, "getContext");
             if (!(ctx instanceof android.content.Context)) return;
-            Object bridge = new H5Bridge((android.content.Context) ctx);
+            Object bridge = new H5Bridge((android.content.Context) ctx, (android.webkit.WebView) webView);
             XposedHelpers.callMethod(webView, "addJavascriptInterface", bridge, "zybcleanHost");
             HookEntry.log("WebKiller bridge attached");
         } catch (Throwable t) {

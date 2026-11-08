@@ -8,7 +8,7 @@ LSPosed 模块，用来给作业帮去广告、去信息流、去推广与无关
 > **⚠️ 本项目代码由 LLM（大语言模型）生成。** 在人工指导下迭代并经真机试跑，但**未经逐行安全审计**。按「现状」提供，安装即自行承担后果；与作业帮 / 百度 / LSPosed 官方无关；不收集、不上传任何数据。以 [MIT](LICENSE) 开源。
 
 - 适配版本：`com.zuoyebang.knowledge` **14.34.0 (1738)**
-- 模块版本：**1.2.0 (4)**，基于 [libxposed API 102](https://github.com/LSPosed/LSPosed)
+- 模块版本：**1.2.1 (5)**，基于 [libxposed API 102](https://github.com/LSPosed/LSPosed)
 - 运行环境：Android 9+（minSdk 24，targetSdk 34），需 LSPosed（支持 API 102 的版本）
 
 ## 功能
@@ -21,9 +21,10 @@ LSPosed 模块，用来给作业帮去广告、去信息流、去推广与无关
 | `DialogKiller` | 首页弹窗任务体系与新手引导浮层一律不展示 |
 | `FloatKiller` | 首页运营浮球不弹、不请求数据 |
 | `HomeChromeKiller` | 首页顶栏净化：搜索框、铃铛（通知）、红点角标全部隐藏；按文字干掉「绑定作业帮APP账号」推广卡 |
-| `WebKiller` | H5 页面注入 JS：隐藏「AI解题」tab 与「讲解中」浮窗；解除复制限制（样式 + 事件拦截）；答案页浮出「复制内容 / 下载图片」工具条，MutationObserver 持续生效 |
+| `WebKiller` | H5 页面注入 JS：隐藏「AI解题」tab 与「讲解中」浮窗；解除复制限制（样式 + 事件拦截）；答案页浮出「复制内容 / 存长图 / 下载图片」工具条，MutationObserver 持续生效 |
+| `PageShot` | **整页长截图**：隐藏浮动层 → 逐屏滚动 → `WebView.draw()` 竖向拼接 → PNG 存相册（`Pictures/zybclean`）。公式与排版原样保留，不受文本提取丢失公式的影响 |
 | `AnswerPageKiller` | 原生视图层按文字隐藏底栏「问小帮」等 AI 入口（遍历 TextView，向上 3 层隐藏整个按钮容器） |
-| `H5Bridge` | WebView 原生桥 `zybcleanHost`：写剪贴板、data-url/带 Cookie 下载图片，存到 `Pictures/zybclean`（MediaStore 优先，回落 FUSE + MediaScanner） |
+| `H5Bridge` | WebView 原生桥 `zybcleanHost`：写剪贴板、整页长截图触发、data-url/带 Cookie 下载图片，存到 `Pictures/zybclean`（MediaStore 优先，回落 FUSE + MediaScanner） |
 | `FastStart` | 把开屏页里 >800ms 的延时压到 250ms，缩短启动等待 |
 
 调试探针（`Probe` / `ViewDump` / `Snap` / `WebEyes`）代码保留，需要在 `HookEntry` 里取消注释才启用。
@@ -63,7 +64,7 @@ LSPosed 模块，用来给作业帮去广告、去信息流、去推广与无关
 ## 目录
 
 ```
-src/io/github/sql0106/zybclean/          HookEntry（XposedModule 入口）+ 各 Killer + H5Bridge + 探针
+src/io/github/sql0106/zybclean/          HookEntry（XposedModule 入口）+ 各 Killer + H5Bridge/PageShot + 探针
 src/io/github/sql0106/zybclean/compat/   libxposed API 102 上的 legacy 兼容层
 libs/libxposed-api-102.jar               编译期依赖（libxposed:api:102.0.0）
 res/values/strings.xml                   模块名与描述
@@ -77,5 +78,6 @@ analysis/EXPERIENCE.md                   方法论与踩坑
 
 - 作业帮资源 id 几乎全被混淆成同名 `zyb`，只能靠**控件类名 + 层级/坐标 + 文字**定位。
 - **搜题结果页是 H5**，AI 解题 tab、讲解浮窗都在网页里，native hook 无效 → 走 WebView JS 注入。
+- 公式是 KaTeX/MathJax 结构或图片，**纯文本提取必然残缺**；要保真就整页长截图（`PageShot`）。
 - 底栏「问小帮」是**原生** `StateTextView`（在 `AISearchBottomInputView` 里），H5 规则管不到 → 由 `AnswerPageKiller` 按文字隐藏。
 - WebView 默认禁长按选中，是 App 主动 `setOnLongClickListener` 拦截的 → hook 后 `setResult(null)` 并强制 `setLongClickable(true)` 才能自由复制。

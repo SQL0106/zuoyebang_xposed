@@ -173,3 +173,22 @@ HookEntry（仅 com.zuoyebang.knowledge）
 - 工具条要 `gate()`：仅当正文够长且含「答案/解析/解答/题目」才显示，否则首页也会浮一个按钮。
 - 下载图片逐个来、每张间隔 ~120ms，并发会 OOM；单图设上限（本项目 40MB）。
 - **JS 写在 Java 字符串里必须做语法校验**：反射导出 `WebKiller.JS` → `node --check`。本轮就是靠它抓到少一个 `}`（`Unexpected token 'catch'`）。构建脚本 `rm -rf build` 会删掉校验工具，记得重建。
+
+
+## 十一、WebView 整页长截图（文本抽不出来时的正解）
+
+**触发场景**：页面内容是公式/图表（KaTeX、MathJax、Canvas、图片），任何 `innerText`/`textContent` 方案都会丢内容，
+用户要的是「所见即所得」。
+
+做法（约 250 行，`PageShot.java`）：
+
+1. **先隐藏浮层**：`position:fixed|sticky` 的元素在逐屏截图时会每屏重复一次 → 截图前 `display:none`，结束还原。
+   只隐藏 `height < 0.6 * innerHeight` 的，避免误伤整屏遮罩。
+2. **探测滚动容器**：优先 `document.scrollingElement`；若存在 `overflowY:auto|scroll`、`clientHeight >= 50% 视口`、
+   `scrollHeight` 更大的子元素，则用它（H5 常见「页内滚动 div」）。统一封装 `scrollTo(y)`，返回**实际** `scrollTop`。
+3. **步长 = clientHeight**，每步：滚动 → **等 400ms 左右**（WebView 渲染异步，等太短会拍出上一屏）→ `wv.draw(canvas)`。
+4. **坐标换算**：`density = wv.getWidth() / window.innerWidth`；裁剪 `getBoundingClientRect()*density`，贴到 `y*density*scale`。
+5. **内存**：总图像素上限（本例 1.2e7）+ 高度上限（20000px）+ 屏数上限（60），超了等比缩小；每屏临时 bitmap 用完 `recycle()`。
+6. **落盘**：`Bitmap.compress(PNG)` → 复用已有的 MediaStore/MediaScanner/私有目录三级回落。
+7. **线程**：JS 桥回调在 JavaBridge 线程，`WebView.draw` 必须 post 到主线程；用静态 `sBusy` 防重入。
+8. **JS 也要 node --check**：把 Java 里拼的 JS 常量反射 dump 成文件再校验，能提前抓住括号不配对。

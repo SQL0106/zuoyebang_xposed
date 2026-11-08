@@ -589,3 +589,65 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 
 ### 产物
 - `zybclean.apk` **41,584 B**，`io.github.sql0106.zybclean` **1.2.0 (4)**，签名 SHA-256 `7139e2df…b3d80`（与旧版同一证书，可覆盖升级）。
+
+## 25. 2026-11-08 —— 复制内容修复（无公式 / 混入 JS 与隐藏 tab）
+
+用户实测反馈：「复制功能没法用：复制结果没有公式，而且混了奇奇怪怪的东西。」
+
+### 根因（两条，同源）
+1. **`cloneNode(true)` 的 `innerText` 退化成 `textContent`**：1.2.0 里 `pageText()` 先把 `document.body` 克隆再取 `innerText`。克隆节点不在渲染树里，浏览器直接回落到 `textContent` → 把 `<script>` 里的内联脚本（`!function(e){...e.ZYBJSBridge.postMessage(...)}`）和所有 `display:none` 的隐藏 tab 文案（`结果1结果3结果4`）全部带进复制结果。
+2. **公式不是文本**：结果页的数学公式由 KaTeX/MathJax 的标记结构（`annotation[encoding="application/x-tex"]` / `mjx-container` / `.katex-mathml`）或 `img`（`data-latex`、`alt`、`src` 里带 `tex=`/`latex=` 参数）渲染，`textContent` 里根本没有这些字符，所以「已知椭圆：的左、右焦点分别为，，」公式位全空。
+
+### 修法（`WebKiller.buildJs()` 内新增约 2.6 KB）
+- **改活在 DOM 上遍历**：`walk(document.body, out, 0)`，不再克隆。
+- 跳过 `SCRIPT/STYLE/NOSCRIPT/TEMPLATE/TEXTAREA/TITLE/IFRAME/HEAD/SVG/CANVAS/VIDEO/AUDIO/INPUT/SELECT/BUTTON` 与 `#zyb-bar`。
+- `vis(e)`：`getComputedStyle` 判 `display:none` / `visibility:hidden` / `opacity:0`、`aria-hidden=true`、`width<=0&&height<=0&&position!=='fixed'` → 整棵子树丢弃（这就是 `结果1结果3结果4` 的过滤点）。
+- **公式还原**（`FC` 计数）：
+  - `script[type^="math/tex"]` → `$...$`；
+  - `mjx-container` / `math` / class 含 `katex|mathjax|mjx-` → `annotation[encoding="application/x-tex"]` → `alttext` → `.katex-mathml` → 兜底 `textContent`，包成 `$...$` 后**整块返回不再下钻**（避免 KaTeX 的 `.katex-html` 重复出字）；
+  - `img`：按 `data-latex` → `data-tex` → `alt` → `title` → `aria-label` 取，含 `\ ^ _ { }` 且不带 `$` 时包 `$`；否则从 `src` 的 `tex|latex|formula|text` 查询参数 `decodeURIComponent`。
+- 块级标签（`DIV/P/LI/TR/H1-H6/BR/PRE/BLOCKQUOTE/SECTION...`）后补 `\n`；最后按行清理：去空行、去 `DROP` 里的 UI 标签（`本题精讲`/`讲解中`/`问小帮`/AI 系列/`复制内容`/`下载图片`/`展开`/`收起`），`\n{3,}`→`\n\n`，截断 200k。
+
+### 产物与验证
+- `node --check`（DumpJs 反射取 `WebKiller.JS`）→ **JS_OK**，JS 从 4,822 B 涨到 **7,485 B**。
+- `./build.sh` → BUILD_OK；`zybclean.apk` 41,584 B；`aapt dump badging` = `io.github.sql0106.zybclean` **1.2.1 (5)**；dex 内含 `MJX-CONTAINER` / `mathTex`；签名 SHA-256 仍 `7139e2df…b3d80`。
+
+
+## 26. 2026-11-08 —— 改用「整页长截图」替代文本复制（PageShot）
+
+用户原话：「复制功能没法用：复制结果没有公式，而且混了奇奇怪怪的东西。」「要不然你就搞成渲染之后出一张完整解答图片。」
+
+### 结论
+文本提取这条路注定残缺：公式是 KaTeX/MathJax 结构或 `img`，`innerText` 拿不到；隐藏 tab、内联脚本又容易混进来。
+**保真只有一条路——把渲染结果拍成图。** 所以新增原生整页长截图，工具条加第三个按钮「存长图」。
+
+### 实现（`PageShot.java`）
+1. JS `PREP`：遍历 `body *`，把 `position:fixed|sticky`（高度 < 0.6 视口，含自家 `#zyb-bar`）临时 `display:none`；
+   再探测滚动容器（`document.scrollingElement`，或 `overflowY:auto|scroll` 且 `clientHeight>=50%` 视口、`scrollHeight` 最大的子元素），
+   暴露 `window.__zybShot = {hidden, target, inner, info(), scrollTo(y)}`；`info()` 返回 `w|totalH|clientH|rectX|rectY|rectW|rectH|inner`。
+2. 原生按 `clientH` 步进：`evaluateJavascript(scrollTo(y))` → 等 `SETTLE_MS=420ms`（WebView 渲染是异步的）→
+   `wv.draw(Canvas(frameBitmap))` → 按 `rect*density` 裁剪，画进总图 `y*density*scale` 处。
+3. `density = wv.getWidth() / window.innerWidth`（CSS px → 设备 px）。
+4. 收尾：`RESTORE` 还原浮层 + 滚动回顶；`Bitmap.compress(PNG)` → `H5Bridge.saveBytes()`（复用相册三级回落）。
+
+### 内存/时间保护
+- 最多 **60 屏**；高度上限 **20000px**；总像素超 **1.2e7** 时整体等比缩放（`scale = sqrt(MAX/(w*h))`）。
+- 每屏一张临时 frame（`ARGB_8888`），用完 `recycle()`；总图 `ARGB_8888`。
+- 420ms/屏，8 屏约 3.4s，全程 toast「正在生成整页长图（N 屏）…」，结束「长图已保存到相册」。
+
+### 接线
+- `H5Bridge` 构造改为 `H5Bridge(Context, WebView)`（要拿实例 draw）；新增 `@JavascriptInterface shot()` →
+  主线程 post → `PageShot.capture()`（JavaBridge 线程不能碰 View）；新增 `static saveBytes()` 供 PageShot 落盘。
+- `WebKiller.ensureBridge` 传 WebView；JS 工具条加 `存长图`（`#f59e0b`）→ `H().shot()`。
+- `PageShot.capture` 用静态 `sBusy` 防重入。
+
+### 坑
+- `Math.round(double)` 返回 **long**，直接赋 `int` 编译报「从 long 转换到 int 可能会有损失」→ 显式 `(int)`。
+- `fixed/sticky` 不隐藏的话，每屏都会把浮层重复贴一遍；隐藏条件加「高度 < 60% 视口」防止误伤满屏遮罩。
+- 只画 `webView.draw()`，所以原生覆盖层（底栏输入框等）不会出现在图里，正好干净。
+
+### 验证
+- `./build.sh` → BUILD_OK，`zybclean.apk` **45,680 B**，`1.2.1 (5)`，签名 SHA-256 仍 `7139e2df…b3d80`。
+- JS 三份全部 `node --check` 通过：`WebKiller.JS` 7,389 B、`PageShot.PREP` 1,619 B、`PageShot.RESTORE` 260 B
+  （DumpJs 改成扫 `WebKiller`/`PageShot` 两个类的 String 常量，输出到 `build/jscheck/*.js`）。
+- dex 含 `PageShot`（9 处）/`zybShot`（3 处）/`saveBytes`；包内 `META-INF/xposed/*` 齐全。

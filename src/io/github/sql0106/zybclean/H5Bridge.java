@@ -42,10 +42,41 @@ public final class H5Bridge {
     private static final int MAX_BYTES = 40 * 1024 * 1024;
 
     private final Context mContext;
+    private final android.webkit.WebView mWebView;
     private final Handler mMain = new Handler(Looper.getMainLooper());
 
-    public H5Bridge(Context context) {
+    public H5Bridge(Context context, android.webkit.WebView webView) {
         mContext = context.getApplicationContext();
+        mWebView = webView;
+    }
+
+    /**
+     * 整页长截图：页面里的「存长图」按钮调这里。Android 主线程才允许 draw WebView，
+     * 而 JavaBridge 线程没有 Looper，所以必须 post 回主线程再走 {@link PageShot}。
+     */
+    @JavascriptInterface
+    public void shot() {
+        final android.webkit.WebView wv = mWebView;
+        if (wv == null) {
+            toast("长图不可用");
+            return;
+        }
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    PageShot.capture(mContext, wv);
+                } catch (Throwable t) {
+                    toast("长图失败：" + t);
+                }
+            }
+        });
+    }
+
+    /** 供 {@link PageShot} 落盘（复用相册写入的三级回落逻辑）。 */
+    static String saveBytes(Context context, String name, String mime, byte[] data) {
+        if (context == null || data == null || data.length == 0) return "";
+        return new H5Bridge(context, null).store(sanitize(name, mime), mime, data);
     }
 
     @JavascriptInterface
