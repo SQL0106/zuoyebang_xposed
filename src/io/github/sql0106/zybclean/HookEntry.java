@@ -70,6 +70,11 @@ public class HookEntry extends XposedModule {
             log("WebKiller install failed", t);
         }
         try {
+            AnswerPageKiller.install(cl);
+        } catch (Throwable t) {
+            log("AnswerPageKiller install failed", t);
+        }
+        try {
             FastStart.install(cl);
         } catch (Throwable t) {
             log("FastStart install failed", t);

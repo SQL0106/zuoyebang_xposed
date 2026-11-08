@@ -155,3 +155,21 @@ HookEntry（仅 com.zuoyebang.knowledge）
 - **不再需要** `assets/xposed_init` 与 Manifest 里的 `xposedmodule/xposeddescription/xposedminversion` meta-data；模块名与描述改从 `res/values/strings.xml` + `android:label`/`android:description` 来。
 - 打包：javac/D8 都要 `-cp`/`--lib` 指向 API jar；aapt 用 `-S res`；合包时把 `module/META-INF` 拷进 APK 根。
 - 坑：`findClass` 这一类 helper 自己实现时**不要声明受检异常**，否则每个探针调用点都要 try-catch；失败抛 RuntimeException 让外层兜。
+
+## 十、WebView 页面「解禁复制 + 一键复制/下载」（2026-11-08，1.2.0）
+
+目标：H5 页面本来禁选中、禁长按，且想给用户一个「复制全文 / 存全部图」的按钮。三件事分开做，缺一不可：
+
+1. **CSS + 事件**：注入 `*{user-select:text!important;-webkit-touch-callout:default!important}`；把 `document.onselectstart/oncontextmenu/oncopy/ondragstart` 置 null；对 `selectstart/contextmenu/copy/cut` 在 document **捕获阶段** `stopPropagation()`（页面的监听多在冒泡阶段）。
+2. **原生拦截**：很多 App 不是靠 CSS，而是 `webView.setOnLongClickListener(...) { return true; }` 直接吃掉长按。hook `View#setOnLongClickListener`，`thisObject instanceof WebView` 时 `param.setResult(null)`（不注册）；再 hook `View#setLongClickable` 把参数强制成 `true`。只做 JS 是没用的。
+3. **原生桥**（`addJavascriptInterface(obj, "zybcleanHost")`）：JS 侧的剪贴板与下载都不可靠——`navigator.clipboard` 需安全上下文且 WebView 版本敏感，`<a download>` 被 App 的 DownloadListener 抢走，跨域图片 canvas 会污染。所以：
+   - 复制 → `@JavascriptInterface copyText(String)` 用 ClipboardManager 写。
+   - 下载 → `saveImage(name, dataUrl)`（base64）与 `saveUrl(name, url)`（HttpURLConnection + **`CookieManager.getCookie(url)`**，带登录 Cookie 就能过防盗链），存 MediaStore `Pictures/<album>`（API29+ 用 IS_PENDING 两段式），失败回落公共目录 + `MediaScannerConnection.scanFile`，再退 App 私有目录。
+   - JavaBridge 线程没有 Looper → Toast 必须 `Handler(Looper.getMainLooper()).post`。
+
+工程要点：
+- 桥只挂一次（`WeakHashMap<WebView,Boolean>`），否则每次导航叠加。
+- 每次 `loadUrl/loadData/loadDataWithBaseURL` 后都要重新注入 JS（导航会清 DOM），用 `window.__zybclean` 幂等标记。
+- 工具条要 `gate()`：仅当正文够长且含「答案/解析/解答/题目」才显示，否则首页也会浮一个按钮。
+- 下载图片逐个来、每张间隔 ~120ms，并发会 OOM；单图设上限（本项目 40MB）。
+- **JS 写在 Java 字符串里必须做语法校验**：反射导出 `WebKiller.JS` → `node --check`。本轮就是靠它抓到少一个 `}`（`Unexpected token 'catch'`）。构建脚本 `rm -rf build` 会删掉校验工具，记得重建。

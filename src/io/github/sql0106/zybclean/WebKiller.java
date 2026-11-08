@@ -6,15 +6,23 @@ import io.github.sql0106.zybclean.compat.XposedHelpers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.WeakHashMap;
 
 /**
- * H5 净化：搜题结果页整页是 NestedHybridWebView 渲染的网页（见 analysis/snap4.txt），
- * 「AI 解题」tab、「讲解中」视频浮卡都在 DOM 里，native 侧 hook 不到，只能注入 JS。
+ * H5 净化 + 阅读增强：搜题结果页 / 解答页整页是 NestedHybridWebView 渲染的网页
+ * （见 analysis/snap4.txt），DOM 里既有垃圾也有用户真正需要的东西，只能注入 JS。
  *
- * 做法：抓住进程里所有 WebView，页面加载后多次 evaluateJavascript 注入一段幂等脚本：
- *   1. 文本等于「AI解题 / AI 解题」的 tab/按钮 → 隐藏；
- *   2. 含「讲解」字样、且向上 8 层内存在 position:fixed / sticky 祖先 → 把那个浮层隐藏；
- *   3. MutationObserver + 定时器持续生效（结果页是 SPA，DOM 随时会变）。
+ * <p>注入的幂等脚本做四件事：</p>
+ * <ol>
+ *   <li>干掉「AI解题 / AI讲题 / 问小帮」tab 与「讲解中」视频浮卡；</li>
+ *   <li>解除页面的选中/复制限制（user-select + 事件拦截），让长按能直接选字复制；</li>
+ *   <li>右下角挂两个悬浮按钮：<b>复制内容</b>（整页题目+解答文本进剪贴板）、
+ *       <b>下载图片</b>（收集页面里所有可见图片，逐张存进相册 Pictures/zybclean）；</li>
+ *   <li>MutationObserver + 定时扫描，应对 SPA 动态渲染。</li>
+ * </ol>
+ *
+ * <p>保存图片与写剪贴板都走原生 {@link H5Bridge}（页面里的 {@code zybcleanHost}），
+ * 原生侧带 WebView 的 Cookie 去下载，绕开跨域限制。</p>
  */
 public class WebKiller {
 
@@ -22,34 +30,112 @@ public class WebKiller {
     private static final long[] DELAYS = {1200L, 3000L, 6000L, 12000L};
 
     private static final List<Object> WEBVIEWS = new ArrayList<Object>();
-
-    private static final String AI_LIST = "['AI解题','AI 解题','AI讲题','AI 讲题']";
+    private static final WeakHashMap<Object, Boolean> BRIDGED = new WeakHashMap<Object, Boolean>();
 
     /** 注入脚本：幂等，重复注入无副作用。 */
-    private static final String JS =
-        "(function(){"
+    private static final String JS = buildJs();
+
+    private static String buildJs() {
+        return "(function(){"
             + "if(window.__zybclean)return;window.__zybclean=1;"
-            + "var AI=" + AI_LIST + ";"
+            + "function H(){try{return window.zybcleanHost||null;}catch(e){return null;}}"
             + "function hide(el){try{el.style.setProperty('display','none','important');}catch(e){}}"
-            + "function scan(){try{"
+            + "function toast(m){try{var h=H();if(h&&h.toast)h.toast(m);}catch(e){}}"
+
+            /* ---------- 1. 允许选中 / 复制 ---------- */
+            + "try{"
+            + "var st=document.createElement('style');"
+            + "st.textContent='*{-webkit-user-select:text!important;user-select:text!important;"
+            + "-webkit-touch-callout:default!important}';"
+            + "(document.head||document.documentElement).appendChild(st);"
+            + "document.onselectstart=null;document.oncontextmenu=null;document.oncopy=null;document.ondragstart=null;"
+            + "var allow=function(e){e.stopPropagation();};"
+            + "var evs=['selectstart','contextmenu','copy','cut'];"
+            + "for(var ei=0;ei<evs.length;ei++){try{document.addEventListener(evs[ei],allow,true);}catch(e){}}"
+            + "}catch(e){}"
+
+            /* ---------- 2. 干掉垃圾 DOM ---------- */
+            + "var AI=/^AI(解题|讲题|答疑)$/i;"
+            + "function scanKill(){try{"
             + "var els=document.querySelectorAll('div,span,li,a,button,p,section,em,strong');"
             + "for(var i=0;i<els.length;i++){var el=els[i];"
             + "var t=(el.textContent||'').replace(/\\s+/g,' ').trim();"
             + "if(!t||t.length>30)continue;"
-            + "for(var k=0;k<AI.length;k++){if(t===AI[k]){var box=el.closest('li')||el.parentElement||el;hide(box);}}"
+            + "var r;try{r=el.getBoundingClientRect();}catch(e3){continue;}"
+            + "var z=t.replace(/\\s/g,'');"
+            + "if((AI.test(z)||z==='问小帮')&&r.height<130)hide(el.closest('li')||el.parentElement||el);"
             + "if(t.indexOf('讲解')>=0){var p=el;for(var d=0;d<8&&p;d++){"
             + "var cs;try{cs=getComputedStyle(p);}catch(e2){break;}"
             + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){hide(p);break;}p=p.parentElement;}}"
-            + "}"
-            + "}catch(e){}}"
-            + "scan();"
-            + "try{new MutationObserver(function(){scan();}).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}"
-            + "setInterval(scan,1500);"
+            + "}}catch(e){}}"
+            /* ---------- 3. 悬浮工具条 ---------- */
+            + "function pageText(){try{"
+            + "var b=document.body.cloneNode(true);"
+            + "var rm=b.querySelectorAll('#zyb-bar');for(var i=0;i<rm.length;i++)rm[i].remove();"
+            + "var t=(b.innerText||b.textContent||'').replace(/[ \\t]+$/gm,'').replace(/\\n{3,}/g,'\\n\\n').trim();"
+            + "return t.slice(0,200000);}catch(e){return '';}}"
+            + "function legacyCopy(t){var ta=document.createElement('textarea');ta.value=t;"
+            + "ta.style.cssText='position:fixed;left:-9999px;top:0;';document.body.appendChild(ta);"
+            + "try{ta.select();document.execCommand('copy');toast('已复制');}catch(e){toast('复制失败');}"
+            + "try{ta.remove();}catch(e){}}"
+            + "function copyAll(){var t=pageText();if(!t){toast('没找到可复制的文字');return;}"
+            + "var h=H();"
+            + "if(h&&h.copyText){try{h.copyText(t);return;}catch(e){}}"
+            + "if(navigator.clipboard&&navigator.clipboard.writeText){"
+            + "navigator.clipboard.writeText(t).then(function(){toast('已复制');},function(){legacyCopy(t);});return;}"
+            + "legacyCopy(t);}"
+            + "function collectImgs(){var out=[],seen={};"
+            + "var imgs=document.querySelectorAll('img');"
+            + "for(var i=0;i<imgs.length;i++){var im=imgs[i];var s=im.currentSrc||im.src;"
+            + "if(!s||seen[s])continue;var r;try{r=im.getBoundingClientRect();}catch(e){continue;}"
+            + "if(r.width<60||r.height<60)continue;seen[s]=1;out.push(s);}return out;}"
+            + "function extOf(u,d){"
+            + "if(d&&d.indexOf('data:image/')===0){var m=/^data:image\\/([a-zA-Z0-9.+-]+)/.exec(d);"
+            + "if(m){var x=m[1].toLowerCase();return x==='jpeg'?'jpg':x;}}"
+            + "var q=(u||'').split('?')[0].split('#')[0];var e=/\\.([a-zA-Z0-9]{2,4})$/.exec(q);"
+            + "return e?e[1].toLowerCase():'jpg';}"
+            + "function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}"
+            + "async function downloadAll(){"
+            + "var h=H();if(!h||(!h.saveUrl&&!h.saveImage)){toast('下载桥未就绪');return;}"
+            + "var list=collectImgs();if(!list.length){toast('没找到图片');return;}"
+            + "toast('开始下载 '+list.length+' 张…');var ok=0,fail=0,ts=Date.now();"
+            + "for(var i=0;i<list.length;i++){var u=list[i];"
+            + "try{var name='zybclean_'+ts+'_'+(i+1)+'.'+extOf(u,'');"
+            + "if(u.indexOf('data:')===0){h.saveImage(name,u);}"
+            + "else if(h.saveUrl){h.saveUrl(name,u);}else{throw new Error('no bridge');}"
+            + "ok++;}catch(e){fail++;}"
+            + "await sleep(120);}"
+            + "toast('已保存 '+ok+' 张'+(fail?('，'+fail+' 张失败'):''));}"
+            + "function mkBar(){"
+            + "if(document.getElementById('zyb-bar')||!document.body)return;"
+            + "var bar=document.createElement('div');bar.id='zyb-bar';"
+            + "bar.style.cssText='position:fixed;right:10px;bottom:140px;z-index:2147483647;"
+            + "display:flex;flex-direction:column;gap:8px;';"
+            + "function mk(txt,color,fn){var b=document.createElement('div');b.textContent=txt;"
+            + "b.style.cssText='padding:8px 12px;border-radius:16px;color:#fff;font-size:13px;"
+            + "line-height:1;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.25);"
+            + "background:'+color+';user-select:none;';"
+            + "b.addEventListener('click',function(e){e.stopPropagation();e.preventDefault();fn();},true);return b;}"
+            + "bar.appendChild(mk('复制内容','#3b82f6',copyAll));"
+            + "bar.appendChild(mk('下载图片','#10b981',function(){downloadAll();}));"
+            + "document.body.appendChild(bar);}"
+            + "function gate(){var bar=document.getElementById('zyb-bar');if(!bar)return;"
+            + "var t=(document.body&&document.body.innerText)||'';"
+            + "var ok=t.length>200&&/(答案|解析|解答|题目)/.test(t);"
+            + "bar.style.display=ok?'flex':'none';}"
+            + "function loop(){scanKill();mkBar();gate();}"
+
+            /* ---------- 4. 常驻 ---------- */
+            + "loop();"
+            + "try{new MutationObserver(function(){loop();})"
+            + ".observe(document.documentElement,{childList:true,subtree:true});}catch(e){}"
+            + "setInterval(loop,1500);"
             + "})()";
+    }
 
     public static void install(ClassLoader cl) {
         try {
-            Class<?> webView = XposedHelpers.findClass("android.webkit.WebView", cl);
+            final Class<?> webView = XposedHelpers.findClass("android.webkit.WebView", cl);
             XC_MethodHook reg = new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
@@ -62,6 +148,30 @@ public class WebKiller {
             };
             XposedBridge.hookAllMethods(webView, "loadUrl", reg);
             XposedBridge.hookAllMethods(webView, "loadDataWithBaseURL", reg);
+            XposedBridge.hookAllMethods(webView, "loadData", reg);
+
+            // 原生桥：页面里的「复制内容 / 下载图片」按钮
+            // 长按选字：作业帮可能给 WebView 装了拦截长按的 listener，这里直接不注册
+            try {
+                Class<?> view = XposedHelpers.findClass("android.view.View", cl);
+                XposedBridge.hookAllMethods(view, "setOnLongClickListener", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (webView.isInstance(param.thisObject)) param.setResult(null);
+                    }
+                });
+                XposedBridge.hookAllMethods(view, "setLongClickable", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (webView.isInstance(param.thisObject)
+                                && param.args != null && param.args.length > 0) {
+                            param.args[0] = Boolean.TRUE;
+                        }
+                    }
+                });
+            } catch (Throwable t) {
+                HookEntry.log("WebKiller long-click hook failed: " + t);
+            }
             HookEntry.log("WebKiller installed");
         } catch (Throwable t) {
             HookEntry.log("WebKiller install failed: " + t);
@@ -69,6 +179,7 @@ public class WebKiller {
     }
 
     private static void inject(final Object webView) {
+        ensureBridge(webView);
         remember(webView); // 只做登记；每次导航都要重新注入（新文档会丢掉 __zybclean 标记）
         for (long delay : DELAYS) {
             try {
@@ -85,6 +196,23 @@ public class WebKiller {
                 HookEntry.log("WebKiller postDelayed failed: " + t);
                 return;
             }
+        }
+    }
+
+    /** 给 WebView 挂上 java 桥对象（重复调用安全）。 */
+    private static void ensureBridge(Object webView) {
+        synchronized (BRIDGED) {
+            if (BRIDGED.containsKey(webView)) return;
+            BRIDGED.put(webView, Boolean.TRUE);
+        }
+        try {
+            Object ctx = XposedHelpers.callMethod(webView, "getContext");
+            if (!(ctx instanceof android.content.Context)) return;
+            Object bridge = new H5Bridge((android.content.Context) ctx);
+            XposedHelpers.callMethod(webView, "addJavascriptInterface", bridge, "zybcleanHost");
+            HookEntry.log("WebKiller bridge attached");
+        } catch (Throwable t) {
+            HookEntry.log("WebKiller bridge failed: " + t);
         }
     }
 

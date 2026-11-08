@@ -78,7 +78,7 @@ echo "apksigner=$APKSIGNER"
 # 1. 模块源码（libxposed API 102 仅编译期依赖，框架运行期提供）
 API_JAR="libs/libxposed-api-102.jar"
 [ -f "$API_JAR" ] || { echo "缺少 $API_JAR"; exit 1; }
-javac --release 8 -nowarn -d build/classes -cp "$API_JAR" $(find src -name '*.java')
+javac --release 8 -nowarn -d build/classes -cp "$API_JAR:$JAR" $(find src -name '*.java')
 
 # 2. dex
 "${D8_CMD[@]}" --min-api 24 --release --lib "$JAR" --lib "$API_JAR" \

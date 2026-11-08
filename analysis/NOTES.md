@@ -559,3 +559,33 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 - 删 `libs/stubs`（legacy 编译期 stub 已无用）、删 `assets/xposed_init`。
 - `.gitignore` 追加 `libs/api102/`、`libs/api102src/`、`libs/api-102.aar`、`libs/api-102-sources.jar`（只保留 `libs/libxposed-api-102.jar`）。
 - commit `57ff71c`「feat!: 迁移到 libxposed API 102…」，已 push。
+
+## 24. 2026-11-08 —— 1.2.0：解答页净化 + 自由复制 + 一键复制/下载图片
+
+用户原话：「解答页面调整，删掉底栏的问小帮和搜题结果中的AI解题，允许直接复制文字，对于题目和解答，允许一键复制内容和一键下载全部图片。」
+
+### 定位结论（来自 `analysis/snap4.txt`，NewV2PicManySearchActivity，158 views）
+- 底栏「问小帮」是**原生控件**：`AISearchBottomInputView`（902,2150-2182,2360）→ `ConstraintLayout` → `LinearLayout`（横向 4 个 `FrameLayout`：分享 / 加错题本 / **问小帮** / 另一项），每项是 `ImageView + StateTextView`。要删的是 `StateTextView text=问小帮`（第 118 行），另有两处 0x0 的 GONE 占位同名 TextView（139/143 行，可忽略）。
+- 顶部 tab 是 `TopicV2NumberIndicator`，只渲染数字 `1`/`2`；「AI解题」文字在 H5 DOM 里 → 归 WebKiller。
+- 结果页 `NestedHybridWebView` + `WebViewDelegate`；首次页仍是 `NewV2PicManySearchActivity`。
+- 所有 id 都是 `zyb`，只能按「类名 + 文字 + 坐标」定位。
+
+### 新增
+- `AnswerPageKiller.java`：hook `Activity#onCreate/onResume`（类名含 Search/Answer/Solution/Explain/Question/Homework/NewV2 才处理），按 `DELAYS={500,1200,2800,6000,12000}` 反复扫 decorView，递归收 `*TextView`（深度≤60），去空格/`\u00a0` 后精确匹配 `{问小帮, AI解题, AI讲题, AI答疑}`，向上最多 3 层找 FrameLayout/LinearLayout/RelativeLayout/ConstraintLayout 父容器，`GONE`。
+- `H5Bridge.java`（JS 接口名 `zybcleanHost`）：`copyText` 写剪贴板；`saveImage(name, dataUrl)` 解 base64 存图；`saveUrl(name, url)` 用 HttpURLConnection + `CookieManager.getCookie(url)` 下载（绕开跨域）；`toast` 主线程弹。存储优先 MediaStore（RELATIVE_PATH `Pictures/zybclean`，IS_PENDING 流程），回落公共目录 + MediaScanner，再退 `getExternalFilesDir("zybclean")`。单图上限 40MB。
+
+### 改造 WebKiller
+- 每次 `loadUrl`/`loadData`/`loadDataWithBaseURL` 后注入，`ensureBridge` 用 WeakHashMap 保证 `addJavascriptInterface` 只挂一次。
+- 解禁复制：注入 `user-select:text` 样式；清空 `onselectstart/oncontextmenu/oncopy/ondragstart`；document 捕获阶段 `stopPropagation`；hook `View#setOnLongClickListener` 对 WebView 直接 `setResult(null)`、hook `setLongClickable` 强制 `true`。
+- JS：`scanKill()` 按正则 `/^AI(解题|讲题|答疑)$/i` 或文字 `问小帮`（高度<130）隐藏，含「讲解」的文字向上 8 层找 `position:fixed|sticky` 祖先隐藏。
+- 悬浮条 `#zyb-bar`（右侧、`bottom:140px`）：`复制内容` = 克隆 body 去掉工具条取 innerText → `copyText` → 退 `navigator.clipboard` → 退 textarea+execCommand；`下载图片` = 收 `img.currentSrc||src`（可见 ≥60x60）逐张 `saveImage`/`saveUrl`，间隔 120ms，toast 汇总。
+- `gate()`：正文 >200 字且含「答案/解析/解答/题目」才显示工具条，避免污染首页。
+- MutationObserver + `setInterval(loop,1500)` 持续生效。
+
+### 构建坑
+- `build.sh` 的 javac 原来只 `-cp "$API_JAR"`；H5Bridge 引 `android.*` 后必须 `-cp "$API_JAR:$JAR"`（$JAR=android.jar），否则 51 个「程序包 android.content 不存在」。
+- `build.sh` 开头 `rm -rf build` 会连 `build/jscheck/` 一起删；校验 JS 要重新生成 `DumpJs.java`。
+- **JS 语法校验流程**：`build/jscheck/DumpJs.java` 反射读 `WebKiller.JS` → `javac -d build/jscheck -cp build/classes build/jscheck/DumpJs.java` → `java -cp build/jscheck:build/classes DumpJs > build/jscheck/webkiller.js` → `node --check`。本轮在此发现 `scanKill()` 的 `for(var i…)` 少一个 `}`（报 `Unexpected token 'catch'`），Java 侧补成 `}}catch(e){}}` 后 `JS_OK`，JS 4,822 B。
+
+### 产物
+- `zybclean.apk` **41,584 B**，`io.github.sql0106.zybclean` **1.2.0 (4)**，签名 SHA-256 `7139e2df…b3d80`（与旧版同一证书，可覆盖升级）。
