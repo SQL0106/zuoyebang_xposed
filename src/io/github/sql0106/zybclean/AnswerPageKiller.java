@@ -23,6 +23,14 @@ public class AnswerPageKiller {
     private static final WeakHashMap<Object, Boolean> BANNER_DONE =
             new WeakHashMap<Object, Boolean>();
 
+    /**
+     * 每个 decor 最近一次的「浅层结构签名」（深度 ≤3 的 childCount 哈希）。
+     * 用来在 onGlobalLayout 里做 O(十几个节点) 的比较：只有树形发生变化（横幅被插进来）
+     * 才跑一次真正的横幅扫描。这样既能抓住 9s 之后才懒加载的横幅，又不会每次 layout 都全树遍历。
+     */
+    private static final WeakHashMap<android.view.View, int[]> SHAPE =
+            new WeakHashMap<android.view.View, int[]>();
+
     /** 复用的屏幕坐标数组（只在主线程使用，不每次 new int[2]）。 */
     private static final int[] LOC = new int[2];
 
@@ -41,131 +49,147 @@ public class AnswerPageKiller {
         }
     }
 
-    /* ---------------- 搜题/解答页底栏：「问小帮」原生入口（按 id + 结构，不看文字） ---------------- */
+    /* ---------------- 搜题/解答页底栏：「问小帮」原生入口（先按类名，再按结构/固定文案） ---------------- */
 
-    /** 只在这类页面处理底栏（搜题/解答页），别处不碰。 */
-    private static final String SEARCH_PREFIX = "com.baidu.homework.activity.search";
-
-    /** 底栏本体（真机 dumpsys 实测 14.34.0）：AISearchBottomInputView，整条 1280x210。 */
+    /** 底栏本体（真机 dumpsys 实测 14.34.0）：AISearchBottomInputView，整条 1280x210。
+     *  用专门类名直接 hook，底栏什么时候 inflate/复用到窗口上都能抓到，不再依赖 Activity.onResume + 定时扫。 */
     private static final String BOTTOM_BAR_CLASS =
             "com.baidu.homework.activity.search.newsearchv3.ai.AISearchBottomInputView";
-    private static final int ID_BOTTOM_BAR = 0x7f090b96;
-
     /** 蓝色按钮容器（839x154）：问小帮是它的兄弟子项，蓝按钮是另一个子项。 */
     private static final int ID_BLUE_WRAP = 0x7f090be3;
 
     /** 蓝色按钮可点击层：这个必须留着（长按它唤回浮窗）。 */
     private static final int ID_BLUE_TAP = 0x7f0911f7;
 
-    /** 每轮补刀时机：底栏晚于 onResume 才 inflate 的情况由第二趟兜底。 */
-    private static final long[] ASK_DELAYS = {600L, 2500L};
-
-    /** 已经处理过的 decor（问小帮藏掉后不再重复扫）。 */
-    private static final WeakHashMap<Object, Boolean> ASK_DONE =
-            new WeakHashMap<Object, Boolean>();
-
-    private static int askLogs;
+    /** 底栏里「问小帮」的固定产品名（多年不变；只在底栏这棵小子树里比对）。 */
+    private static final String ASK_TEXT = "问小帮";
 
     private static void installAskHelpKiller(ClassLoader cl) {
-        Class<?> act = XposedHelpers.findClass("android.app.Activity", cl);
-        XposedBridge.hookAllMethods(act, "onResume", new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                try {
-                    Object self = param.thisObject;
-                    if (self == null) return;
-                    // 一次前缀比较过滤掉其它 App 页面，不做任何遍历。
-                    if (!self.getClass().getName().startsWith(SEARCH_PREFIX)) return;
-                    Object win = XposedHelpers.callMethod(self, "getWindow");
-                    if (win == null) return;
-                    final Object decor = XposedHelpers.callMethod(win, "getDecorView");
-                    if (!(decor instanceof android.view.View)) return;
-                    final android.view.View root = (android.view.View) decor;
-                    if (ASK_DONE.containsKey(root)) return;
-                    for (long delay : ASK_DELAYS) {
-                        root.postDelayed(new Runnable() {
+        Class<?> bar;
+        try {
+            bar = XposedHelpers.findClass(BOTTOM_BAR_CLASS, cl);
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: bottom bar class not found");
+            return;
+        }
+        java.lang.reflect.Constructor<?>[] ctors = bar.getDeclaredConstructors();
+        for (java.lang.reflect.Constructor<?> ctor : ctors) {
+            try {
+                XposedBridge.hookMethod(ctor, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object o = param.thisObject;
+                        if (!(o instanceof android.view.View)) return;
+                        final android.view.View v = (android.view.View) o;
+                        v.addOnAttachStateChangeListener(
+                                new android.view.View.OnAttachStateChangeListener() {
+                                    @Override
+                                    public void onViewAttachedToWindow(android.view.View view) {
+                                        hideAskHelpInBar(view);
+                                    }
+
+                                    @Override
+                                    public void onViewDetachedFromWindow(android.view.View view) {
+                                    }
+                                });
+                        // 底栏内部子项可能比底栏本身晚一步 inflate，补一次 post 兜底。
+                        v.post(new Runnable() {
                             @Override
                             public void run() {
-                                try {
-                                    if (hideAskHelp(root)) {
-                                        ASK_DONE.put(root, Boolean.TRUE);
-                                    }
-                                } catch (Throwable t) {
-                                    HookEntry.log("AnswerPageKiller: ask-help failed: " + t);
-                                }
+                                hideAskHelpInBar(v);
                             }
-                        }, delay);
+                        });
                     }
-                } catch (Throwable t) {
-                    HookEntry.log("AnswerPageKiller: ask-help schedule failed: " + t);
-                }
+                });
+            } catch (Throwable t) {
+                HookEntry.log("AnswerPageKiller: bottom bar hook failed: " + t);
             }
-        });
-        HookEntry.log("AnswerPageKiller: ask-help hook ok");
+        }
+        HookEntry.log("AnswerPageKiller: ask-help hooked on " + BOTTOM_BAR_CLASS);
     }
 
     /**
-     * 藏掉底栏里的「问小帮」入口：它和蓝色主按钮同在容器 {@link #ID_BLUE_WRAP} 里，
-     * 结构上是「图标 + 文字」的 LinearLayout，而蓝按钮是带 {@link #ID_BLUE_TAP} 的那一支。
-     * 所以规则是：容器里除蓝按钮那一支之外、含 TextView 的子项全部 GONE。
-     * 全程只读 id 与子节点结构，不读任何文字。
+     * 在底栏子树里藏「问小帮」。两条规则，命中任意一条即可：
+     * <ol>
+     *   <li>结构规则：底栏里带 {@link #ID_BLUE_WRAP} 的容器中，除带 {@link #ID_BLUE_TAP} 的蓝按钮那支外，
+     *       含 TextView 的子项全 GONE（拍照/预览态：问小帮与蓝色主按钮并排）；</li>
+     *   <li>文案规则：子树里文字恰好是「问小帮」的 TextView，向上找它的按钮容器（FrameLayout）GONE
+     *       （搜题结果态：分享 / 加错题本 / 问小帮 / 再拍一页 四个平级按钮）。</li>
+     * </ol>
+     * 只在底栏这棵十几到几十个节点的小树里走，不涉及整页遍历。
      */
-    private static boolean hideAskHelp(android.view.View root) {
-        android.view.View bar = null;
-        try {
-            bar = root.findViewById(ID_BOTTOM_BAR);
-        } catch (Throwable ignored) {
-        }
-        if (bar == null) {
-            bar = findByClass(root, BOTTOM_BAR_CLASS, 0);
-        }
-        if (bar == null) {
-            if (askLogs < 3) {
-                askLogs++;
-                HookEntry.log("AnswerPageKiller: probe no bottom bar");
-            }
-            return false;
-        }
+    private static boolean hideAskHelpInBar(android.view.View bar) {
+        if (bar == null) return false;
+        int hidden = 0;
+
         android.view.View wrap = null;
         try {
             wrap = bar.findViewById(ID_BLUE_WRAP);
         } catch (Throwable ignored) {
         }
-        if (wrap == null) return false;
-        if (!(wrap instanceof android.view.ViewGroup)) return false;
-
-        int hidden = 0;
-        android.view.ViewGroup g = (android.view.ViewGroup) wrap;
-        for (int i = 0, n = g.getChildCount(); i < n; i++) {
-            android.view.View c = g.getChildAt(i);
-            if (c == null) continue;
-            int id;
-            try {
-                id = c.getId();
-            } catch (Throwable t) {
-                continue;
+        if (wrap instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) wrap;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) {
+                android.view.View c = g.getChildAt(i);
+                if (c == null) continue;
+                int id;
+                try {
+                    id = c.getId();
+                } catch (Throwable t) {
+                    continue;
+                }
+                if (id == ID_BLUE_TAP || c.findViewById(ID_BLUE_TAP) != null) continue; // 蓝按钮本体
+                if (!hasTextView(c, 2)) continue;
+                if (c.getVisibility() != android.view.View.GONE) {
+                    c.setVisibility(android.view.View.GONE);
+                    hidden++;
+                }
             }
-            if (id == ID_BLUE_TAP || c.findViewById(ID_BLUE_TAP) != null) continue; // 蓝按钮本体，保留
-            if (!hasTextView(c, 2)) continue;
-            if (c.getVisibility() != android.view.View.GONE) {
-                c.setVisibility(android.view.View.GONE);
+        }
+
+        java.util.List<android.view.View> textViews = new java.util.ArrayList<android.view.View>();
+        collectText(bar, textViews, 0);
+        for (android.view.View tv : textViews) {
+            if (!ASK_TEXT.contentEquals(((android.widget.TextView) tv).getText())) continue;
+            if (tv.getVisibility() != android.view.View.VISIBLE) continue;
+            android.view.View btn = buttonOfText(tv, bar);
+            // 底栏里还有几个 0×0 的占位节点也带同样的文案，别把它们（以及它们的容器）当按钮藏了。
+            if (btn == null || btn == bar) continue;
+            if (btn.getWidth() <= 0 || btn.getHeight() <= 0) continue;
+            if (btn.getVisibility() != android.view.View.GONE) {
+                btn.setVisibility(android.view.View.GONE);
                 hidden++;
             }
         }
+
         if (hidden > 0) {
-            HookEntry.log("AnswerPageKiller: hid " + hidden + " ask-help entry(ies) in bottom bar");
+            HookEntry.log("AnswerPageKiller: hid " + hidden + " ask-help entry(ies)");
         }
         return hidden > 0;
     }
 
-    private static android.view.View findByClass(android.view.View v, String name, int depth) {
-        if (v == null || depth > 40) return null;
-        if (name.equals(v.getClass().getName())) return v;
-        if (!(v instanceof android.view.ViewGroup)) return null;
+    private static void collectText(android.view.View v, java.util.List<android.view.View> out, int depth) {
+        if (v == null || depth > 12) return;
+        if (v instanceof android.widget.TextView) out.add(v);
+        if (!(v instanceof android.view.ViewGroup)) return;
         android.view.ViewGroup g = (android.view.ViewGroup) v;
         for (int i = 0, n = g.getChildCount(); i < n; i++) {
-            android.view.View r = findByClass(g.getChildAt(i), name, depth + 1);
-            if (r != null) return r;
+            collectText(g.getChildAt(i), out, depth + 1);
+        }
+    }
+
+    /** 文字节点 → 它的按钮容器：向上最多 3 层，取第一个 FrameLayout/LinearLayout/RelativeLayout。 */
+    private static android.view.View buttonOfText(android.view.View tv, android.view.View stop) {
+        android.view.View cur = tv;
+        for (int i = 0; i < 3; i++) {
+            Object p = cur.getParent();
+            if (!(p instanceof android.view.View)) return null;
+            cur = (android.view.View) p;
+            if (cur == stop) return null;
+            String s = cur.getClass().getSimpleName();
+            if (s.contains("FrameLayout") || s.contains("LinearLayout") || s.contains("RelativeLayout")) {
+                return cur;
+            }
         }
         return null;
     }
@@ -219,6 +243,7 @@ public class AnswerPageKiller {
                             }
                         }, delay);
                     }
+                    watchLayout(root);
                 } catch (Throwable t) {
                     HookEntry.log("AnswerPageKiller: banner schedule failed: " + t);
                 }
@@ -226,6 +251,48 @@ public class AnswerPageKiller {
         };
         XposedBridge.hookAllMethods(act, "onResume", hook);
         HookEntry.log("AnswerPageKiller: record banner hook ok");
+    }
+
+    /**
+     * 结构变化才扫：给 decor 挂一次 onGlobalLayout，比较浅层签名。
+     * 横幅是懒加载的（真机实测 9s 后才出现），固定延时抓不到；又不能每次 layout 全树遍历。
+     */
+    private static void watchLayout(final android.view.View root) {
+        synchronized (SHAPE) {
+            if (SHAPE.containsKey(root)) return;
+            SHAPE.put(root, new int[]{-1});
+        }
+        try {
+            root.getViewTreeObserver().addOnGlobalLayoutListener(
+                    new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                        @Override
+                        public void onGlobalLayout() {
+                            try {
+                                if (BANNER_DONE.containsKey(root)) return;
+                                int sig = shapeSig(root, 0);
+                                int[] last = SHAPE.get(root);
+                                if (last != null && last[0] == sig) return;
+                                SHAPE.put(root, new int[]{sig});
+                                killBottomBanner(root);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: layout watch failed: " + t);
+        }
+    }
+
+    /** 浅层结构签名：只统计深度 ≤3 的子树形状（childCount），十几次虚调用。 */
+    private static int shapeSig(android.view.View v, int depth) {
+        if (v == null || depth > 3) return 0;
+        if (!(v instanceof android.view.ViewGroup)) return 1;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        int s = g.getChildCount() * 31 + 7;
+        for (int i = 0, n = g.getChildCount(); i < n; i++) {
+            s = s * 31 + shapeSig(g.getChildAt(i), depth + 1);
+        }
+        return s;
     }
 
     private static void killBottomBanner(android.view.View root) {

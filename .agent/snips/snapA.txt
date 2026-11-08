@@ -1,0 +1,149 @@
+SNAP activity=com.baidu.homework.activity.user.UserAskRecordActivity
+DecorView id=0xffffffff vis=V box=0,0-1280,2800
+  LinearLayout id=0xffffffff vis=V box=0,0-1280,2800
+    ViewStub id=action_mode_bar_stub vis=G box=0,0-0,0
+    FrameLayout id=content vis=V box=0,0-1280,2800
+      SwapBackLayout id=0xffffffff vis=V box=0,0-1280,2800
+        LinearLayout id=0xffffffff vis=V box=0,140-1280,2800
+          CommonTitleBar id=title_bar vis=V box=0,140-1280,309
+            RelativeLayout id=zyb vis=V box=0,140-1280,308
+              LinearLayout id=zyb vis=V box=21,140-175,308
+                MultipleIconButtonView id=0xffffffff vis=V box=21,140-175,308
+                  ImageButton id=zyb vis=V box=21,140-175,308
+              LinearLayout id=zyb vis=V box=514,140-766,308
+                TextView id=0xffffffff vis=V box=514,140-766,308 text=历史记录
+              LinearLayout id=zyb vis=V box=1105,140-1259,308
+                MultipleIconButtonView id=0xffffffff vis=V box=1105,140-1259,308
+                  ImageButton id=zyb vis=V box=1105,140-1259,308
+            View id=0xffffffff vis=V box=0,308-1280,309
+          FrameLayout id=zyb vis=V box=0,309-1280,2800
+            RelativeLayout id=0xffffffff vis=V box=0,309-1280,2800
+              FrameLayout id=zyb vis=V box=0,309-1280,2562
+                FrameLayout id=0xffffffff vis=V box=0,309-1280,2562
+                   id=0xffffffff vis=V box=0,309-1280,2562
+                    FrameLayout id=0xffffffff vis=G box=0,309-1280,309
+                      LinearLayout id=zyb vis=V box=0,309-1280,309
+                        RelativeLayout id=zyb vis=G box=0,309-0,309
+                          ImageView id=zyb vis=V box=0,309-0,309
+                        RelativeLayout id=zyb vis=G box=0,309-0,309
+                          ImageView id=zyb vis=V box=0,309-0,309
+                    SecureListView id=0xffffffff vis=V box=0,309-1280,2562
+                      LinearLayout id=0xffffffff vis=V box=0,309-1280,659
+                        AskRecordBannerView id=zyb vis=G box=0,309-0,309
+                          FrameLayout id=0xffffffff vis=V box=0,309-0,309
+                            ConstraintLayout id=0xffffffff vis=V box=0,309-0,309
+                              BannerPagerView id=zyb vis=V box=0,309-0,309
+                                AutoScrollViewPager id=zyb vis=V box=0,309-0,309
+                                IndicatorView id=zyb vis=G box=0,309-0,309
+                                ImageView id=zyb vis=G box=0,309-0,309
+                        ConstraintLayout id=zyb vis=V box=56,365-1224,603
+                          ImageView id=zyb vis=V box=98,407-252,561
+                          TextView id=zyb vis=V box=280,407-525,473 text=我的错题本
+                          TextView id=zyb vis=V box=539,413-623,468 text=最新
+                          TextView id=zyb vis=V box=280,489-923,546 text=语文1道，数学7道，政治1道...
+                          ImageView id=zyb vis=V box=1161,467-1182,502
+                      LinearLayout id=0xffffffff vis=V box=0,659-1280,1360
+                        LinearLayout id=zyb vis=V box=0,659-1280,1360
+                          ConstraintLayout id=zyb vis=V box=0,673-1280,827
+                            TextView id=zyb vis=V box=56,673-182,827 text=今天
+                          RelativeLayout id=0xffffffff vis=V box=56,827-1224,1303
+                            FrameLayout id=zyb vis=V box=56,827-1224,1177
+                              FrameLayout id=zyb vis=V box=56,827-1224,1177
+                                RecyclingImageView id=zyb vis=V box=56,827-1224,1177
+                              TextView id=zyb vis=G box=56,827-56,827
+                              TextView id=zyb vis=G box=56,827-56,827 text=新增视频讲解
+                            TextView id=zyb vis=V box=77,1100-175,1160 text=整页
+                            ImageView id=zyb vis=G box=56,827-56,827
+                            RelativeLayout id=0xffffffff vis=V box=56,1177-1224,1303
+                              TextView id=zyb vis=V box=56,1211-140,1268 text=数学
+                              TextView id=zyb vis=V box=175,1211-317,1268 text=1个答案
+                              TextView id=zyb vis=V box=352,1211-436,1268 text=精讲
+                              ImageView id=zyb vis=G box=56,1177-56,1177
+                              SingleTagLayout id=zyb vis=V box=436,1240-1224,1240
+                                TextView id=0xffffffff vis=G box=436,1240-436,1240
+                                TextView id=0xffffffff vis=G box=436,1240-436,1240
+                                TextView id=0xffffffff vis=G box=436,1240-436,1240
+                          View id=zyb vis=V box=56,1303-1224,1304
+                        View id=zyb vis=G box=0,659-0,659
+                      LinearLayout id=0xffffffff vis=V box=0,1360-1280,1907
+                        LinearLayout id=zyb vis=V box=0,1360-1280,1907
+                          ConstraintLayout id=zyb vis=V box=0,1374-1280,1374
+                            TextView id=zyb vis=G box=0,1374-0,1374 text=今天
+                          RelativeLayout id=0xffffffff vis=V box=56,1374-1224,1850
+                            FrameLayout id=zyb vis=V box=56,1374-1224,1724
+                              FrameLayout id=zyb vis=V box=56,1374-1224,1724
+                                RecyclingImageView id=zyb vis=V box=56,1374-1224,1724
+                              TextView id=zyb vis=G box=56,1374-56,1374
+                              TextView id=zyb vis=G box=56,1374-56,1374 text=新增视频讲解
+                            TextView id=zyb vis=V box=77,1647-175,1707 text=整页
+                            ImageView id=zyb vis=G box=56,1374-56,1374
+                            RelativeLayout id=0xffffffff vis=V box=56,1724-1224,1850
+                              TextView id=zyb vis=V box=56,1758-140,1815 text=数学
+                              TextView id=zyb vis=V box=175,1758-326,1815 text=5个答案
+                              TextView id=zyb vis=V box=361,1758-445,1815 text=精讲
+                              ImageView id=zyb vis=G box=56,1724-56,1724
+                              SingleTagLayout id=zyb vis=V box=445,1787-1224,1787
+                                TextView id=0xffffffff vis=G box=445,1787-445,1787
+                                TextView id=0xffffffff vis=G box=445,1787-445,1787
+                                TextView id=0xffffffff vis=G box=445,1787-445,1787
+                          View id=zyb vis=V box=56,1850-1224,1851
+                        View id=zyb vis=G box=0,1360-0,1360
+                      LinearLayout id=0xffffffff vis=V box=0,1907-1280,2454
+                        LinearLayout id=zyb vis=V box=0,1907-1280,2454
+                          ConstraintLayout id=zyb vis=V box=0,1921-1280,1921
+                            TextView id=zyb vis=G box=0,1921-0,1921 text=今天
+                          RelativeLayout id=0xffffffff vis=V box=56,1921-1224,2397
+                            FrameLayout id=zyb vis=V box=56,1921-1224,2271
+                              FrameLayout id=zyb vis=V box=56,1921-1224,2271
+                                RecyclingImageView id=zyb vis=V box=56,1921-1224,2271
+                              TextView id=zyb vis=G box=56,1921-56,1921
+                              TextView id=zyb vis=G box=56,1921-56,1921 text=新增视频讲解
+                            TextView id=zyb vis=V box=77,2194-175,2254 text=整页
+                            ImageView id=zyb vis=G box=56,1921-56,1921
+                            RelativeLayout id=0xffffffff vis=V box=56,2271-1224,2397
+                              TextView id=zyb vis=V box=56,2305-140,2362 text=数学
+                              TextView id=zyb vis=V box=175,2305-324,2362 text=2个答案
+                              TextView id=zyb vis=V box=359,2305-443,2362 text=精讲
+                              ImageView id=zyb vis=G box=56,2271-56,2271
+                              SingleTagLayout id=zyb vis=V box=443,2334-1224,2334
+                                TextView id=0xffffffff vis=G box=443,2334-443,2334
+                                TextView id=0xffffffff vis=G box=443,2334-443,2334
+                                TextView id=0xffffffff vis=G box=443,2334-443,2334
+                          View id=zyb vis=V box=56,2397-1224,2398
+                        View id=zyb vis=G box=0,1907-0,1907
+                      LinearLayout id=0xffffffff vis=V box=0,2454-1280,3000
+                        LinearLayout id=zyb vis=V box=0,2454-1280,2944
+                          ConstraintLayout id=zyb vis=V box=0,2468-1280,2468
+                            TextView id=zyb vis=G box=0,2468-0,2468 text=今天
+                          RelativeLayout id=0xffffffff vis=V box=56,2468-1224,2944
+                            FrameLayout id=zyb vis=V box=56,2468-1224,2818
+                              FrameLayout id=zyb vis=V box=56,2468-1224,2818
+                                RecyclingImageView id=zyb vis=V box=56,2468-1224,2818
+                              TextView id=zyb vis=G box=56,2468-56,2468
+                              TextView id=zyb vis=G box=56,2468-56,2468 text=新增视频讲解
+                            TextView id=zyb vis=V box=77,2741-175,2801 text=整页
+                            ImageView id=zyb vis=G box=56,2468-56,2468
+                            RelativeLayout id=0xffffffff vis=V box=56,2818-1224,2944
+                              TextView id=zyb vis=V box=56,2852-140,2909 text=数学
+                              TextView id=zyb vis=V box=175,2852-325,2909 text=3个答案
+                              TextView id=zyb vis=V box=360,2852-444,2909 text=精讲
+                              ImageView id=zyb vis=G box=56,2818-56,2818
+                              SingleTagLayout id=zyb vis=V box=444,2881-1224,2881
+                                TextView id=0xffffffff vis=G box=444,2881-444,2881
+                                TextView id=0xffffffff vis=G box=444,2881-444,2881
+                                TextView id=0xffffffff vis=G box=444,2881-444,2881
+                          View id=zyb vis=G box=0,2454-0,2454
+                        View id=zyb vis=V box=0,2944-1280,2972
+                  ConstraintLayout id=zyb vis=G box=0,309-0,309
+                    TextView id=zyb vis=V box=0,309-0,309 text=今天
+                  NewVideoRemindersLayout id=0xffffffff vis=G box=0,309-0,309
+                    RelativeLayout id=0xffffffff vis=V box=0,309-0,309
+                      TextView id=zyb vis=V box=0,309-0,309 text=你最近搜的题有视频讲解啦
+                      ImageView id=zyb vis=G box=0,309-0,309
+              View id=zyb vis=V box=0,2561-1280,2562
+              RelativeLayout id=zyb vis=V box=0,2562-1280,2800
+                TextView id=zyb vis=V box=56,2604-1224,2758 text=高效学习，一个VIP就够了
+                ImageView id=zyb vis=G box=0,2562-0,2562
+      View id=0xffffffff vis=V box=0,0-1280,2800
+  View id=statusBarBackground vis=V box=0,0-1280,140
+SNAP decor views=147

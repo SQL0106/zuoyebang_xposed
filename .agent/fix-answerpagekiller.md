@@ -52,3 +52,31 @@ Activity.onResume 钩子）已全部删除；本类只保留历史记录页贴�
   含 TextView 的子项一律 `setVisibility(GONE)`（即「问小帮」入口）；
 - 600/2500ms 两趟，`ASK_DONE` 记 decor，藏掉后不再扫。
 H5 侧（结果页 tab 栏）仍由 WebKiller 的 JS 负责，且导航区一律不碰。
+
+## 追加 3（2026-11-08 真机验证）
+日志证据（当前装的是 3c28ce5 那版 1.3.0）：
+```
+AdCardKiller: hide XMarqueeView RelativeLayout / ConstraintLayout  → 广告卡清掉了
+AdCardKiller: hide holder FrameLayout                              → 信息流 AD*Holder 清掉了
+AnswerPageKiller: ask-help hook ok        （此后**没有任何** hid 日志 → 问小帮没被藏）
+AnswerPageKiller: banner scan scheduled   （4 档都排了，但没有 hid → 横幅靠固定延时抓不到）
+```
+快照 `UserAskRecordActivity` 里贴底横幅长这样：
+```
+RelativeLayout 0,2562-1280,2800
+  TextView text=高效学习，一个VIP就够了
+```
+→ 几何判据本身是对的（历史日志出现过 `banner RelativeLayout h=238 top=2562` 命中），
+**问题是横幅在 9s 之后才懒加载**，固定延时扫不到。
+
+### 修法
+1. 问小帮：不再用 Activity.onResume + 定时扫整页，改成 hook
+   **`AISearchBottomInputView` 构造器**（专门类名），attach 时只在底栏这棵小子树里处理：
+   - 结构规则：`0x7f090be3` 容器里除带 `0x7f0911f7` 的蓝按钮那支外，含 TextView 的子项 GONE（拍照/预览态）；
+   - 文案规则（底栏内唯一允许的文字匹配）：子树里文字恰好「问小帮」且可见，向上 3 层取
+     FrameLayout/LinearLayout/RelativeLayout 按钮容器，`width>0 && height>0` 才 GONE
+     （snap4 里还有几个 0×0 占位节点也带这文案，必须靠尺寸排除）。
+   依据 `analysis/snap4.txt`：搜题结果态底栏是 分享 / 加错题本 / 问小帮 / 再拍一页 四个平级 FrameLayout。
+2. 贴底 VIP 横幅：保留几何判据，另给 decor 挂**一次** `OnGlobalLayoutListener`，
+   每次 layout 只算「深度 ≤3 的 childCount 结构签名」（十几次虚调用），
+   **签名变了**（=有节点插入）才跑一次横幅扫描。既能抓 9s 后懒加载的横幅，又不会每次 layout 全树遍历。
