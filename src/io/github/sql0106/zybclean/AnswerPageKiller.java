@@ -127,7 +127,9 @@ public class AnswerPageKiller {
             wrap = bar.findViewById(ID_BLUE_WRAP);
         } catch (Throwable ignored) {
         }
-        if (wrap instanceof android.view.ViewGroup) {
+        // 只有「蓝按钮确实在这个容器里」时才套用结构规则；否则这个 id 可能落在别处，
+        // 会把分享/加错题本等正常按钮一起藏掉（真机搜题态实测过）。
+        if (wrap instanceof android.view.ViewGroup && wrap.findViewById(ID_BLUE_TAP) != null) {
             android.view.ViewGroup g = (android.view.ViewGroup) wrap;
             for (int i = 0, n = g.getChildCount(); i < n; i++) {
                 android.view.View c = g.getChildAt(i);

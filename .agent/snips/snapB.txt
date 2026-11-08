@@ -1,0 +1,148 @@
+SNAP activity=com.baidu.homework.activity.search.newsearchv3.whole.NewV2PicManySearchActivity
+DecorView id=0xffffffff vis=V box=0,0-1280,2800
+  LinearLayout id=0xffffffff vis=V box=0,0-1280,2800
+    ViewStub id=action_mode_bar_stub vis=G box=0,0-0,0
+    FrameLayout id=content vis=V box=0,0-1280,2800
+      SwapBackLayout id=0xffffffff vis=V box=0,0-1280,2800
+        LinearLayout id=0xffffffff vis=V box=0,0-1280,2800
+          CommonTitleBar id=title_bar vis=G box=0,0-0,0
+            RelativeLayout id=zyb vis=V box=0,0-0,0
+              LinearLayout id=zyb vis=V box=0,0-0,0
+                MultipleIconButtonView id=0xffffffff vis=V box=0,0-0,0
+                  ImageButton id=zyb vis=V box=0,0-0,0
+              LinearLayout id=zyb vis=V box=0,0-0,0
+                TextView id=0xffffffff vis=V box=0,0-0,0
+              LinearLayout id=zyb vis=V box=0,0-0,0
+                MultipleIconButtonView id=0xffffffff vis=V box=0,0-0,0
+                  ImageButton id=zyb vis=G box=0,0-0,0
+            View id=0xffffffff vis=V box=0,0-0,0
+          FrameLayout id=zyb vis=V box=0,0-1280,2800
+            RelativeLayout id=zyb vis=V box=0,0-1280,2800
+              FrameLayout id=zyb vis=V box=0,0-1280,2800
+                FrameLayout id=zyb vis=V box=0,0-1280,2800
+                  FrameLayout id=zyb vis=V box=0,0-1280,2800
+                    RelativeLayout id=zyb vis=V box=0,0-1280,2800
+                      SearchResultV2TouchImageView id=zyb vis=V box=0,0-1280,2800
+                      SimplePhotoCropView id=zyb vis=V box=0,0-1280,2800
+                      ImageDecorV2Container id=zyb vis=V box=0,0-1280,2800
+                      OutLineScanView id=zyb vis=G box=0,0-1280,717
+                    RelativeLayout id=zyb vis=G box=0,0-1280,2800
+                      View id=0xffffffff vis=V box=0,2240-70,2310
+                      View id=0xffffffff vis=V box=1210,2240-1280,2310
+                      View id=zyb vis=V box=0,2310-1280,2800
+                      CountDownLoadingView id=zyb vis=G box=524,2453-755,2684
+                    View id=zyb vis=V box=0,0-1280,420
+                    CustomCoordinatorLayout id=0xffffffff vis=V box=0,0-1280,2800
+                      LinearLayout id=zyb vis=V box=0,140-1280,2940
+                        FrameLayout id=zyb vis=V box=154,140-1280,294
+                          TopicV2NumberIndicator id=zyb vis=V box=193,161-333,273
+                            LinearLayout id=0xffffffff vis=V box=193,161-333,273
+                              RelativeLayout id=0xffffffff vis=V box=193,161-333,273
+                                ImageView id=zyb vis=V box=207,161-319,273
+                                LinearLayout id=0xffffffff vis=V box=253,184-273,250
+                                  TextView id=zyb vis=V box=253,184-273,250 text=1
+                                  ImageView id=zyb vis=G box=253,184-253,184
+                                  ImageView id=zyb vis=G box=253,184-253,184
+                                AppCompatImageView id=zyb vis=V box=244,115-333,189
+                        AppBarLayout id=zyb vis=V box=0,294-1280,364
+                          LinearLayout id=0xffffffff vis=V box=0,294-1280,364
+                            ImageView id=zyb vis=V box=549,294-731,364
+                        SearchResultPager id=zyb vis=V box=0,364-1280,2940
+                          FrameLayout id=0xffffffff vis=V box=0,364-1280,2590
+                            FrameLayout id=zyb vis=V box=0,364-1280,2590
+                              NestedHybridWebView id=zyb vis=V box=0,364-1280,2590
+                                WebViewDelegate id=0xffffffff vis=V box=0,364-1280,2590
+                        RelativeLayout id=zyb vis=G box=0,140-0,140
+                    RelativeLayout id=zyb vis=V box=0,0-1280,2800
+                      RelativeLayout id=zyb vis=G box=0,0-0,0
+                    RelativeLayout id=zyb vis=V box=0,140-1280,294
+                      ImageView id=zyb vis=V box=56,168-154,266
+                      FrameLayout id=zyb vis=V box=1266,140-1280,294
+                        ConstraintLayout id=0xffffffff vis=V box=1266,140-1280,294
+                          LinearLayout id=zyb vis=G box=1266,140-1266,140
+                            AppCompatTextView id=zyb vis=V box=1266,140-1266,140 text=单题结果
+                          LinearLayout id=zyb vis=G box=1266,140-1266,140
+                            AppCompatTextView id=zyb vis=V box=1266,140-1266,140 text=使用矫正图
+                          LinearLayout id=zyb vis=G box=1266,140-1266,140
+                            AppCompatTextView id=zyb vis=G box=1266,140-1266,140 text=翻译
+                            ImageView id=zyb vis=V box=1266,140-1266,140
+                          ImageView id=zyb vis=G box=1266,140-1266,140
+                FrameLayout id=zyb vis=G box=0,0-0,0
+                ViewStub id=zyb vis=G box=0,0-0,0
+                ViewStub id=zyb vis=G box=0,0-0,0
+              ConstraintLayout id=0xffffffff vis=V box=0,2590-1280,2800
+                FrameLayout id=zyb vis=V box=0,2590-1280,2800
+                  FrameLayout id=0xffffffff vis=V box=0,2590-1280,2800
+                    LinearLayout id=zyb vis=G box=0,2590-0,2590
+                      FrameLayout id=zyb vis=V box=0,2590-0,2590
+                        ImageView id=zyb vis=V box=0,2590-0,2590
+                        StateTextView id=zyb vis=V box=0,2590-0,2590 text=分享
+                      FrameLayout id=zyb vis=G box=0,2590-0,2590
+                        ImageView id=zyb vis=V box=0,2590-0,2590
+                        StateTextView id=zyb vis=V box=0,2590-0,2590 text=打印
+                      FrameLayout id=zyb vis=V box=0,2590-0,2590
+                        ImageView id=zyb vis=V box=0,2590-0,2590
+                        StateTextView id=zyb vis=V box=0,2590-0,2590 text=加错题本
+                      TextView id=zyb vis=G box=0,2590-0,2590 text=加入错题本
+                      FrameLayout id=zyb vis=V box=0,2590-0,2590
+                        TextView id=zyb vis=V box=0,2590-0,2590 text=再拍一页
+                    AISearchBottomInputView id=zyb vis=V box=0,2590-1280,2800
+                      ConstraintLayout id=zyb vis=V box=0,2590-1280,2800
+                        FrameLayout id=zyb vis=V box=0,2590-1280,2590
+                          View id=zyb vis=G box=0,2590-0,2590
+                          ImageView id=zyb vis=G box=0,2590-0,2590
+                        RecyclerView id=zyb vis=G box=0,2590-0,2590
+                        ConstraintLayout id=zyb vis=V box=0,2590-1280,2800
+                          LinearLayout id=zyb vis=V box=0,2629-532,2761
+                            FrameLayout id=zyb vis=G box=0,2629-0,2629
+                              TextView id=zyb vis=V box=0,2629-0,2629 text=再拍一页
+                            FrameLayout id=zyb vis=V box=42,2629-182,2761
+                              ImageView id=zyb vis=V box=70,2629-154,2713
+                              StateTextView id=zyb vis=V box=77,2720-147,2761 text=分享
+                            FrameLayout id=zyb vis=V box=217,2629-357,2761
+                              ImageView id=zyb vis=V box=245,2629-329,2713
+                              StateTextView id=zyb vis=V box=217,2720-357,2761 text=加错题本
+                            FrameLayout id=zyb vis=V box=392,2629-532,2761
+                              ImageView id=zyb vis=V box=420,2629-504,2713
+                              StateTextView id=zyb vis=V box=409,2720-514,2761 text=问小帮
+                          RelativeLayout id=zyb vis=G box=0,2590-0,2590
+                            RelativeLayout id=zyb vis=G box=0,2590-0,2590
+                              View id=zyb vis=V box=0,2590-0,2590
+                              TextView id=zyb vis=V box=0,2590-0,2590
+                              ImageView id=zyb vis=V box=0,2590-0,2590
+                              View id=0xffffffff vis=V box=0,2590-0,2590
+                            ImageView id=zyb vis=G box=0,2590-0,2590
+                            AISearchEditText id=zyb vis=V box=0,2590-0,2590
+                            AiPressInputView id=zyb vis=G box=0,2590-0,2590
+                            FrameLayout id=zyb vis=V box=0,2590-0,2590
+                              FrameLayout id=zyb vis=V box=0,2590-0,2590
+                                ImageView id=zyb vis=V box=0,2590-0,2590
+                              AiStopView id=zyb vis=G box=0,2590-0,2590
+                                FrameLayout id=0xffffffff vis=V box=0,2590-0,2590
+                                  ImageView id=zyb vis=V box=0,2590-0,2590
+                                  ImageView id=zyb vis=V box=0,2590-0,2590
+                              FrameLayout id=zyb vis=G box=0,2590-0,2590
+                                ImageView id=zyb vis=V box=0,2590-0,2590
+                            RelativeLayout id=zyb vis=G box=0,2590-0,2590
+                              ImageView id=zyb vis=V box=0,2590-0,2590
+                              TextView id=zyb vis=V box=0,2590-0,2590 text=问小帮
+                          LinearLayout id=zyb vis=V box=574,2618-1238,2772
+                            LinearLayout id=zyb vis=G box=574,2618-574,2618
+                              ImageView id=zyb vis=V box=574,2618-574,2618
+                              TextView id=0xffffffff vis=V box=574,2618-574,2618 text=问小帮
+                            FrameLayout id=zyb vis=V box=574,2618-1238,2772
+                              TextView id=zyb vis=V box=574,2618-1238,2772 text=再拍一页
+                        VoiceInputView id=zyb vis=G box=0,2590-0,2590
+                          ConstraintLayout id=0xffffffff vis=V box=0,2590-0,2590
+                            View id=zyb vis=V box=0,2590-0,2590
+                            View id=zyb vis=V box=0,2590-0,2590
+                            TextView id=zyb vis=V box=0,2590-0,2590 text=松手发送，上移取消
+                            ConstraintLayout id=zyb vis=V box=0,2590-0,2590
+                              View id=zyb vis=V box=0,2590-0,2590
+                              SecureLottieAnimationView id=zyb vis=V box=0,2590-0,2590
+                FrameLayout id=zyb vis=G box=0,2590-0,2590
+              ViewStub id=zyb vis=G box=0,0-0,0
+              ViewStub id=zyb vis=G box=0,0-0,0
+              ViewStub id=zyb vis=G box=0,0-0,0
+      View id=0xffffffff vis=V box=0,0-1280,2800
+SNAP decor views=146

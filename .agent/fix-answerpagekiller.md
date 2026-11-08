@@ -80,3 +80,25 @@ RelativeLayout 0,2562-1280,2800
 2. 贴底 VIP 横幅：保留几何判据，另给 decor 挂**一次** `OnGlobalLayoutListener`，
    每次 layout 只算「深度 ≤3 的 childCount 结构签名」（十几次虚调用），
    **签名变了**（=有节点插入）才跑一次横幅扫描。既能抓 9s 后懒加载的横幅，又不会每次 layout 全树遍历。
+
+## 追加 4（第二张快照 snapB：搜题结果页底栏，真机）
+```
+AISearchBottomInputView 0,2590-1280,2800
+  ConstraintLayout
+    LinearLayout 0,2629-532,2761                    ← 左侧四按钮
+      FrameLayout G 0x0  (再拍一页占位)
+      FrameLayout 42,2629-182,2761   ImageView + StateTextView 分享
+      FrameLayout 217,2629-357,2761  ImageView + StateTextView 加错题本
+      FrameLayout 392,2629-532,2761  ImageView + StateTextView 问小帮   ← 目标
+    RelativeLayout G 0x0 (输入态)
+    LinearLayout 574,2618-1238,2772
+      LinearLayout G 574,2618-574,2618 (TextView 问小帮 0x0 占位)
+      FrameLayout 574,2618-1238,2772 TextView 再拍一页   ← 大蓝按钮，必须留
+```
+由此确认：
+1. 底栏类名就是 `AISearchBottomInputView`，hook 构造器方案可行；
+2. 目标按钮 = 问小帮 StateTextView 的父 FrameLayout（140×132），
+   同文案的 0×0 占位节点靠 `width>0 && height>0` 排除；
+3. **结构规则必须加前置条件**：只有 `0x7f090be3` 容器里确实存在 `0x7f0911f7`（蓝按钮）时才按
+   「除蓝按钮那支外全藏」处理——否则该 id 落在别的容器上会把「分享 / 加错题本」一起藏掉。
+   已加 `wrap.findViewById(ID_BLUE_TAP) != null` 守卫。
