@@ -47,6 +47,13 @@ public final class PageShot {
     }
 
     public static void capture(final Context context, final WebView wv) {
+        capture(context, wv, "full");
+    }
+
+    /**
+     * @param part "full"=整页、"q"=只存题目、"a"=只存解答+解析
+     */
+    public static void capture(final Context context, final WebView wv, String part) {
         if (sBusy) {
             toast(context, "正在生成，请稍候");
             return;
@@ -56,7 +63,7 @@ public final class PageShot {
             return;
         }
         sBusy = true;
-        new Job(context.getApplicationContext(), wv).start();
+        new Job(context.getApplicationContext(), wv, part == null ? "full" : part).start();
     }
 
     private static void toast(Context ctx, String msg) {
@@ -70,6 +77,7 @@ public final class PageShot {
 
         private final Context ctx;
         private final WebView wv;
+        private final String part;
         private final Handler main = new Handler(Looper.getMainLooper());
 
         /* JS 回报 */
@@ -81,6 +89,8 @@ public final class PageShot {
         private int rectY;
         private int rectW;
         private int rectH;
+        /** 「答案/解析」标题的文档纵坐标（CSS px），JS 探测；<=0 表示没找到。 */
+        private int splitY;
         private boolean innerScroller;
 
         /* 可见区域（WebView 本地坐标，设备 px） */
@@ -103,9 +113,10 @@ public final class PageShot {
         private View scroller;
         private int scrollerStartY;
 
-        Job(Context ctx, WebView wv) {
+        Job(Context ctx, WebView wv, String part) {
             this.ctx = ctx;
             this.wv = wv;
+            this.part = part;
         }
 
         void start() {
@@ -157,6 +168,7 @@ public final class PageShot {
                 rectW = Integer.parseInt(p[6].trim());
                 rectH = Integer.parseInt(p[7].trim());
                 innerScroller = "1".equals(p[8].trim());
+                splitY = p.length > 9 ? Integer.parseInt(p[9].trim()) : 0;
                 return cssW > 0 && cssScrollH > 0 && cssClientH > 0 && rectW > 0 && rectH > 0;
             } catch (Throwable t) {
                 return false;
@@ -449,6 +461,26 @@ public final class PageShot {
             saveBitmap(out);
         }
 
+        /** 用 JS 探到的「答案」标题位置把整页图切成题目段 / 解答段。 */
+        private Bitmap cropPart(Bitmap whole) {
+            int h = whole.getHeight();
+            int splitPx = Math.round(splitY * density);
+            if (splitY <= 0 || splitPx < 40 || splitPx > h - 40) {
+                toast(ctx, "没找到题目/解答分界，已存整页");
+                return whole;
+            }
+            boolean q = "q".equals(part);
+            int y0 = q ? 0 : Math.max(0, splitPx - 12);
+            int y1 = q ? Math.min(h, splitPx) : h;
+            if (y1 - y0 < 40) {
+                toast(ctx, "分段太短，已存整页");
+                return whole;
+            }
+            HookEntry.log("PageShot crop part=" + part + " " + whole.getWidth() + "x" + (y1 - y0)
+                    + " from y=" + y0 + " (split=" + splitPx + ")");
+            return Bitmap.createBitmap(whole, 0, y0, whole.getWidth(), y1 - y0);
+        }
+
         /** 统一落盘：PNG → 相册。expand 路径与拼接路径共用。 */
         private void saveBitmap(Bitmap bmp) {
             try {
@@ -456,13 +488,21 @@ public final class PageShot {
                     done(false, "没有可保存的图像");
                     return;
                 }
+                if (part != null && part.length() > 0 && !"full".equals(part)) {
+                    Bitmap cp = cropPart(bmp);
+                    if (cp != bmp) {
+                        if (bmp == out) out = null;
+                        bmp.recycle();
+                        bmp = cp;
+                    }
+                }
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(256 * 1024);
                 bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
                 byte[] data = bos.toByteArray();
                 String name = "zybclean_" + android.text.format.DateFormat.format(
                         "yyyyMMdd_HHmmss", System.currentTimeMillis()) + ".png";
                 String path = H5Bridge.saveBytes(ctx, name, "image/png", data);
-                HookEntry.log("PageShot saved: mode=" + modeOf() + " steps=" + step
+                HookEntry.log("PageShot saved: mode=" + modeOf() + " part=" + part + " steps=" + step
                         + " " + bmp.getWidth() + "x" + bmp.getHeight()
                         + " size=" + data.length + " B path=" + path);
                 if (bmp != out) bmp.recycle();
@@ -513,7 +553,39 @@ public final class PageShot {
                         main.postDelayed(new Runnable() {
                             @Override
                             public void run() {
-                                drawExpanded(keepH);
+                                // 撑开/重排后广告条常会「复活」，落笔前再清一次，并刷新题目/解答分界
+                                try {
+                                    wv.evaluateJavascript(CLEAN, new ValueCallback<String>() {
+                                        @Override
+                                        public void onReceiveValue(String value) {
+                                            int s = -1;
+                                            int hid = -1;
+                                            try {
+                                                String v = value == null ? ""
+                                                        : value.replace("\"", "").trim();
+                                                int bar = v.indexOf('|');
+                                                if (bar >= 0) {
+                                                    s = Integer.parseInt(v.substring(0, bar).trim());
+                                                    hid = Integer.parseInt(v.substring(bar + 1).trim());
+                                                } else if (v.length() > 0) {
+                                                    s = Integer.parseInt(v);
+                                                }
+                                            } catch (Throwable ignored) {
+                                            }
+                                            if (s > 60) splitY = s;
+                                            HookEntry.log("PageShot clean split=" + s
+                                                    + " hidden=" + hid + " part=" + part);
+                                            main.postDelayed(new Runnable() {
+                                                @Override
+                                                public void run() {
+                                                    drawExpanded(keepH);
+                                                }
+                                            }, 420L);
+                                        }
+                                    });
+                                } catch (Throwable t) {
+                                    drawExpanded(keepH);
+                                }
                             }
                         }, 900L);
                     }
@@ -691,11 +763,18 @@ public final class PageShot {
                     + "&&r.width>=window.innerWidth*0.5){hide(t);return;}"
                     + "t=t.parentElement;}hide(e);}"
                     + "var ADRE=/(^|[\\s_-])(ad|ads|advert|advertisement|banner|promo|gg)([\\s_-]|$)/i;"
+                    /* 作业帮自己的视频/会员推广模块：素材全在 zyb-vip.cdnjtzy.com，纯背景图无文字 */
+                    + "var HRE=/(video__promotion|vip-video-explain|single-video__wrapper|"
+                    + "video__payBox|video-poster__wrapper|poster-player__wrapper|relate-video|"
+                    + "paisou-svip-video|new-poster|biz-poster)/;"
+                    + "var VCDN=/zyb-vip\\.cdnjtzy\\.com/i;"
                     + "var nodes=document.querySelectorAll('body *');"
                     + "for(var k=0;k<nodes.length;k++){var n2=nodes[k];"
                     + "var tag=n2.tagName;"
                     + "if(tag==='VIDEO'||tag==='IFRAME'){upHide(n2);continue;}"
                     + "var cls=((n2.id||'')+' '+(typeof n2.className==='string'?n2.className:'')).trim();"
+                    + "if(cls&&HRE.test(cls)){hide(n2);continue;}"
+                    + "if(tag==='IMG'&&VCDN.test(n2.currentSrc||n2.src||'')){upHide(n2);continue;}"
                     + "if(cls&&ADRE.test(cls)){var ar=n2.getBoundingClientRect();"
                     + "if(ar.height>=60&&ar.height<window.innerHeight*0.6){hide(n2);continue;}}"
                     + "if(n2.children.length)continue;"
@@ -711,13 +790,23 @@ public final class PageShot {
                     + "if((oy==='auto'||oy==='scroll')&&n.scrollHeight>n.clientHeight+80"
                     + "&&n.clientHeight>=window.innerHeight*0.5&&n.scrollHeight>best){"
                     + "best=n.scrollHeight;target=n;inner=true;}}"
+                    + "var split=0;"
+                    + "try{var heads=document.querySelectorAll('div,span,p,h1,h2,h3,h4,strong,b,em');"
+                    + "for(var hh=0;hh<heads.length;hh++){var he=heads[hh];"
+                    + "var ht=(he.textContent||'').replace(/\\s/g,'');"
+                    + "if(!ht||ht.length>6)continue;"
+                    + "if(!/^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$/.test(ht))continue;"
+                    + "var hr=he.getBoundingClientRect();"
+                    + "if(hr.height<=0||hr.height>90)continue;"
+                    + "var hy=Math.round(hr.top+(window.pageYOffset||0));"
+                    + "if(hy>60&&(split===0||hy<split))split=hy;}}catch(e){}"
                     + "window.__zybStop=1;"
                     + "window.__zybShot={hidden:hidden,target:target,inner:inner,"
                     + "info:function(){var r=target.getBoundingClientRect();"
                     + "return [Math.round(window.innerWidth),Math.round(target.scrollHeight),"
                     + "Math.round(target.clientHeight),Math.round(window.innerHeight),"
                     + "Math.round(r.left),Math.round(r.top),"
-                    + "Math.round(r.width),Math.round(r.height),inner?1:0].join('|');},"
+                    + "Math.round(r.width),Math.round(r.height),inner?1:0,split].join('|');},"
                     + "scrollTo:function(y){try{if(inner){target.scrollTop=y;}"
                     + "else{try{window.scrollTo({top:y,left:0,behavior:'instant'});}"
                     + "catch(e2){window.scrollTo(0,y);}"
@@ -732,4 +821,56 @@ public final class PageShot {
                     + "try{s.hidden[i].style.removeProperty('display');}catch(e){}}"
                     + "try{if(s.inner){s.target.scrollTop=0;}else{window.scrollTo(0,0);}}catch(e){}"
                     + "window.__zybShot=null;window.__zybStop=0;}catch(e){}})()";
+
+    /**
+     * 截图落笔前的第二次清理：页面在撑开/重排后会重新渲染 React 节点，
+     * PREP 阶段隐藏掉的广告条会「复活」。这里再扫一遍并重新计算题目/解答分界。
+     *
+     * @return 分界 y（CSS px，0 表示没找到）
+     */
+    private static final String CLEAN =
+            "(function(){try{"
+                    + "var KILL=[/本题精讲/,/讲解(中|视频)/,/视频讲解/,/双十一/,/新客专享/,"
+                    + "/元\\s*\\/\\s*月/,/立即抢/,/即将结束/,/开通会员/,/立即开通/,"
+                    + "/限时/,/秒杀/,/领券/,/领取/,/^广告$/,/特惠/,/优惠/,"
+                    + "/立即下载/,/下载\\s*App/i,/扫码/];"
+                    + "var ADRE=/(^|[\\s_-])(ad|ads|advert|advertisement|banner|promo|promotion|gg|coupon|sales)([\\s_-]|$)/i;"
+                    + "var HRE=/(video__promotion|vip-video-explain|single-video__wrapper|"
+                    + "video__payBox|video-poster__wrapper|poster-player__wrapper|relate-video|"
+                    + "paisou-svip-video|new-poster|biz-poster)/;"
+                    + "var VCDN=/zyb-vip\\.cdnjtzy\\.com/i;"
+                    + "var vh=window.innerHeight,vw=window.innerWidth,hid=0;"
+                    + "function hide(el){try{el.style.setProperty('display','none','important');hid++;}catch(e){}}"
+                    + "function upHide(e){var t=e;"
+                    + "for(var i=0;i<6&&t&&t.parentElement&&t!==document.body;i++){"
+                    + "var r=t.getBoundingClientRect();"
+                    + "if(r.height>=40&&r.height<vh*0.6&&r.width>=vw*0.5){hide(t);return;}"
+                    + "t=t.parentElement;}hide(e);}"
+                    + "function scan(root){var nodes=root.querySelectorAll('*');"
+                    + "for(var k=0;k<nodes.length;k++){var n=nodes[k];"
+                    + "if(n.id==='zyb-bar'){hide(n);continue;}"
+                    + "var cls=((n.id||'')+' '+(typeof n.className==='string'?n.className:'')).trim();"
+                    + "if(cls&&HRE.test(cls)){hide(n);continue;}"
+                    + "if(n.tagName==='IMG'&&VCDN.test(n.currentSrc||n.src||'')){upHide(n);continue;}"
+                    + "if(cls&&ADRE.test(cls)){var ar=n.getBoundingClientRect();"
+                    + "if(ar.height>=40&&ar.height<vh*0.7){hide(n);continue;}}"
+                    + "if(n.childElementCount>4)continue;"
+                    + "var tx=(n.textContent||'').replace(/\\s+/g,' ').trim();"
+                    + "if(!tx||tx.length>40)continue;"
+                    + "for(var q=0;q<KILL.length;q++){if(KILL[q].test(tx)){upHide(n);break;}}}}"
+                    + "scan(document);"
+                    + "var hosts=document.querySelectorAll('*');"
+                    + "for(var s=0;s<hosts.length;s++){try{if(hosts[s].shadowRoot)scan(hosts[s].shadowRoot);}catch(e){}}"
+                    + "var split=0;"
+                    + "var heads=document.querySelectorAll('div,span,p,h1,h2,h3,h4,strong,b,em');"
+                    + "for(var i2=0;i2<heads.length;i2++){var h2=heads[i2];"
+                    + "var t2=(h2.textContent||'').replace(/[\\s\\u00a0]/g,'');"
+                    + "if(!t2||t2.length>6)continue;"
+                    + "if(!/^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$/.test(t2))continue;"
+                    + "var r2;try{r2=h2.getBoundingClientRect();}catch(e){continue;}"
+                    + "if(r2.height<=0||r2.height>90)continue;"
+                    + "var top=r2.top+(window.pageYOffset||0);"
+                    + "if(top>60&&(split===0||top<split))split=top;}"
+                    + "return String(Math.round(split))+\"|\"+hid;"
+                    + "}catch(e){return '';}})()";
 }

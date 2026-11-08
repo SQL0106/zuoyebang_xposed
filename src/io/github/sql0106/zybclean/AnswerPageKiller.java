@@ -34,6 +34,9 @@ public class AnswerPageKiller {
             "Search", "Answer", "Solution", "Explain", "Question", "Homework", "NewV2",
     };
 
+    /** 贴底横幅清理的时机（不按文字匹配，只按几何位置）。 */
+    private static final long[] BANNER_DELAYS = {800L, 2500L, 5000L, 9000L};
+
     public static void install(final ClassLoader cl) {
         try {
             Class<?> activity = XposedHelpers.findClass("android.app.Activity", cl);
@@ -51,6 +54,11 @@ public class AnswerPageKiller {
             XposedBridge.hookAllMethods(activity, "onResume", hook);
             XposedBridge.hookAllMethods(activity, "onCreate", hook);
             HookEntry.log("AnswerPageKiller installed");
+            try {
+                installRecordBanner(cl);
+            } catch (Throwable t) {
+                HookEntry.log("AnswerPageKiller: banner install failed: " + t);
+            }
         } catch (Throwable t) {
             HookEntry.log("AnswerPageKiller install failed: " + t);
         }
@@ -176,6 +184,144 @@ public class AnswerPageKiller {
             XposedHelpers.callMethod(view, "setVisibility", Integer.valueOf(GONE));
         } catch (Throwable ignored) {
         }
+    }
+
+    /* ---------------- 历史记录页：贴底 VIP 横幅（按几何定位，不看文字） ---------------- */
+
+    private static final String RECORD_ACTIVITY =
+            "com.baidu.homework.activity.user.UserAskRecordActivity";
+
+    /** 只在「历史记录」页挂一次；该页底部横幅是全宽、贴底、高度适中的 ViewGroup。 */
+    private static void installRecordBanner(ClassLoader cl) {
+        // 目标 Activity 不自己声明 onResume，直接 hook 子类会落空；
+        // 改为 hook Activity 的 onResume，只对目标类名放行（一次字符串比较，开销可忽略）。
+        Class<?> act = XposedHelpers.findClass("android.app.Activity", cl);
+        XC_MethodHook hook = new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    if (!RECORD_ACTIVITY.equals(param.thisObject.getClass().getName())) return;
+                    HookEntry.log("AnswerPageKiller: banner scan scheduled");
+                    Object win = XposedHelpers.callMethod(param.thisObject, "getWindow");
+                    if (win == null) return;
+                    final Object decor = XposedHelpers.callMethod(win, "getDecorView");
+                    if (decor == null) return;
+                    for (long delay : BANNER_DELAYS) {
+                        XposedHelpers.callMethod(decor, "postDelayed", new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    killBottomBanner(decor);
+                                } catch (Throwable t) {
+                                    HookEntry.log("AnswerPageKiller: banner failed: " + t);
+                                }
+                            }
+                        }, Long.valueOf(delay));
+                    }
+                } catch (Throwable t) {
+                    HookEntry.log("AnswerPageKiller: banner schedule failed: " + t);
+                }
+            }
+        };
+        XposedBridge.hookAllMethods(act, "onResume", hook);
+        HookEntry.log("AnswerPageKiller: record banner hook ok");
+    }
+
+    private static int probeCount;
+
+    private static void killBottomBanner(Object decor) {
+        int dh = intOf(decor, "getHeight");
+        int dw = intOf(decor, "getWidth");
+        if (dh <= 0 || dw <= 0) {
+            HookEntry.log("AnswerPageKiller: probe decor not laid out dw=" + dw + " dh=" + dh);
+            return;
+        }
+        probeCount = 0;
+        int[] base = locOf(decor);
+        int hidden = walkBanner(decor, base[1], dw, dh, 0);
+        if (hidden > 0) {
+            HookEntry.log("AnswerPageKiller: hid " + hidden + " bottom banner(s)");
+        } else {
+            HookEntry.log("AnswerPageKiller: probe no hit dw=" + dw + " dh=" + dh
+                    + " base=" + base[1]);
+        }
+    }
+
+    /**
+     * 深度优先找「整屏宽 + 贴屏幕底 + 高度不过屏高 30%」的容器并 GONE。
+     * 用 {@code getLocationOnScreen} 取绝对坐标，避免被 App 自身滚动/偏移影响。
+     */
+    private static int walkBanner(Object v, int screenY, int dw, int dh, int depth) {
+        if (v == null || depth > 40) return 0;
+        int w = intOf(v, "getWidth");
+        int h = intOf(v, "getHeight");
+        int top = locOf(v)[1] - screenY;
+        int bottom = top + h;
+        boolean hit = depth > 0
+                && w >= dw * 95 / 100
+                && h >= 80 && h <= dh * 3 / 10
+                && bottom >= dh - 6 && bottom <= dh + 6;
+        if (!hit && depth > 0 && probeCount < 10
+                && w >= dw * 90 / 100 && h >= 40 && bottom >= dh * 8 / 10) {
+            probeCount++;
+            HookEntry.log("AnswerPageKiller: probe " + safeName(v) + " w=" + w + " h=" + h
+                    + " top=" + top + " bottom=" + bottom);
+        }
+        if (hit) {
+            hideSiblingAbove(v);
+            hide(v);
+            HookEntry.log("AnswerPageKiller: banner " + safeName(v) + " h=" + h + " top=" + top);
+            return 1;
+        }
+        int n = intOf(v, "getChildCount");
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            Object child = null;
+            try {
+                child = XposedHelpers.callMethod(v, "getChildAt", Integer.valueOf(i));
+            } catch (Throwable ignored) {
+            }
+            count += walkBanner(child, screenY, dw, dh, depth + 1);
+        }
+        return count;
+    }
+
+    /** 横幅上沿常有一条 1px 分隔线，一起收掉。 */
+    private static void hideSiblingAbove(Object v) {
+        try {
+            Object parent = XposedHelpers.callMethod(v, "getParent");
+            if (parent == null) return;
+            int n = intOf(parent, "getChildCount");
+            int idx = -1;
+            for (int i = 0; i < n; i++) {
+                Object c = XposedHelpers.callMethod(parent, "getChildAt", Integer.valueOf(i));
+                if (c == v) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx <= 0) return;
+            Object prev = XposedHelpers.callMethod(parent, "getChildAt", Integer.valueOf(idx - 1));
+            if (prev != null && intOf(prev, "getHeight") <= 12) hide(prev);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String safeName(Object v) {
+        try {
+            return v.getClass().getSimpleName();
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private static int[] locOf(Object view) {
+        int[] loc = new int[2];
+        try {
+            XposedHelpers.callMethod(view, "getLocationOnScreen", loc);
+        } catch (Throwable ignored) {
+        }
+        return loc;
     }
 
     private static int intOf(Object target, String method) {

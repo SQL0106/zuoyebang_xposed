@@ -83,7 +83,7 @@ public class HookEntry extends XposedModule {
         // try { Probe.install(cl); } catch (Throwable t) { log("Probe install failed", t); }
         // try { ViewDump.install(cl); } catch (Throwable t) { log("ViewDump install failed", t); }
         // try { Snap.install(cl); } catch (Throwable t) { log("Snap install failed", t); }
-        // try { WebEyes.install(cl); } catch (Throwable t) { log("WebEyes install failed", t); }
+        try { WebEyes.install(cl); } catch (Throwable t) { log("WebEyes install failed", t); }
         log("all hooks installed");
     }
 

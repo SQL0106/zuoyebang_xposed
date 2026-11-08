@@ -56,6 +56,16 @@ public final class H5Bridge {
      */
     @JavascriptInterface
     public void shot() {
+        shotPart("full");
+    }
+
+    /**
+     * 分段截图。
+     *
+     * @param part {@code "full"} 整页 / {@code "q"} 只存题目 / {@code "a"} 只存解答+解析
+     */
+    @JavascriptInterface
+    public void shotPart(final String part) {
         final android.webkit.WebView wv = mWebView;
         if (wv == null) {
             toast("长图不可用");
@@ -65,7 +75,7 @@ public final class H5Bridge {
             @Override
             public void run() {
                 try {
-                    PageShot.capture(mContext, wv);
+                    PageShot.capture(mContext, wv, part);
                 } catch (Throwable t) {
                     toast("长图失败：" + t);
                 }

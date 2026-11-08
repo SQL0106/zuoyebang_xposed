@@ -8,7 +8,7 @@ LSPosed 模块，用来给作业帮去广告、去信息流、去推广与无关
 > **⚠️ 本项目代码由 LLM（大语言模型）生成。** 在人工指导下迭代并经真机试跑，但**未经逐行安全审计**。按「现状」提供，安装即自行承担后果；与作业帮 / 百度 / LSPosed 官方无关；不收集、不上传任何数据。以 [MIT](LICENSE) 开源。
 
 - 适配版本：`com.zuoyebang.knowledge` **14.34.0 (1738)**
-- 模块版本：**1.2.6 (10)**，基于 [libxposed API 102](https://github.com/LSPosed/LSPosed)
+- 模块版本：**1.2.9 (13)**，基于 [libxposed API 102](https://github.com/LSPosed/LSPosed)
 - 运行环境：Android 9+（minSdk 24，targetSdk 34），需 LSPosed（支持 API 102 的版本）
 
 ## 功能

@@ -16,8 +16,8 @@ import java.util.WeakHashMap;
  * <ol>
  *   <li>干掉「AI解题 / AI讲题 / 问小帮」tab 与「讲解中」视频浮卡；</li>
  *   <li>解除页面的选中/复制限制（user-select + 事件拦截），让长按能直接选字复制；</li>
- *   <li>右下角挂三个悬浮按钮：<b>复制内容</b>（整页题目+解答文本进剪贴板）、
- *       <b>存长图</b>（原生滚动拼接整页截图，公式排版原样保留，见 {@link PageShot}）、
+ *   <li>右下角挂四个悬浮按钮：<b>复制内容</b>（整页题目+解答文本进剪贴板）、
+ *       <b>存题目 / 存解答</b>（原生整页截图后按「答案」标题切段，公式排版原样保留，见 {@link PageShot}）、
  *       <b>下载图片</b>（收集页面里所有可见图片，逐张存进相册 Pictures/zybclean）；</li>
  *   <li>MutationObserver + 定时扫描，应对 SPA 动态渲染。</li>
  * </ol>
@@ -54,6 +54,17 @@ public class WebKiller {
             + "var evs=['selectstart','contextmenu','copy','cut'];"
             + "for(var ei=0;ei<evs.length;ei++){try{document.addEventListener(evs[ei],allow,true);}catch(e){}}"
             + "}catch(e){}"
+
+            /* ---------- 1.5 会员推广 / 视频广告（按真实 class，不看文字） ---------- */
+            /* 证据：div.video__promotion 是 325x44 的纯背景图广告（zyb-vip.cdnjtzy.com）；
+               外层 div.video.vip-video-explain-v2 是「本题精讲」付费视频卡；其余为相关视频/考点视频推广。 */
+            + "try{var st2=document.createElement('style');"
+            + "st2.textContent='[class*=\"video__promotion\"],[class*=\"vip-video-explain\"],"
+            + "[class*=\"single-video__wrapper\"],[class*=\"video__payBox\"],"
+            + "[class*=\"video-poster__wrapper\"],[class*=\"poster-player__wrapper\"],"
+            + "[class*=\"relate-video\"],[class*=\"paisou-svip-video\"],"
+            + "[class*=\"new-poster\"],[class*=\"biz-poster\"]{display:none!important}';"
+            + "(document.head||document.documentElement).appendChild(st2);}catch(e){}"
 
             /* ---------- 2. 干掉垃圾 DOM ---------- */
             + "var AI=/^AI(解题|讲题|答疑)$/i;"
@@ -168,8 +179,10 @@ public class WebKiller {
             + "background:'+color+';user-select:none;';"
             + "b.addEventListener('click',function(e){e.stopPropagation();e.preventDefault();fn();},true);return b;}"
             + "bar.appendChild(mk('复制内容','#3b82f6',copyAll));"
-            + "bar.appendChild(mk('存长图','#f59e0b',function(){var h=H();"
-            + "if(h&&h.shot){toast('生成中…');h.shot();}else{toast('桥未就绪');}}));"
+            + "bar.appendChild(mk('存题目','#f59e0b',function(){var h=H();"
+            + "if(h&&h.shotPart){toast('生成中…');h.shotPart('q');}else{toast('桥未就绪');}}));"
+            + "bar.appendChild(mk('存解答','#f59e0b',function(){var h=H();"
+            + "if(h&&h.shotPart){toast('生成中…');h.shotPart('a');}else{toast('桥未就绪');}}));"
             + "bar.appendChild(mk('下载图片','#10b981',function(){downloadAll();}));"
             + "document.body.appendChild(bar);}"
             + "function gate(){var bar=document.getElementById('zyb-bar');if(!bar)return;"
