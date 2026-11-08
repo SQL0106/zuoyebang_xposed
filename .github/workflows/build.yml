@@ -17,12 +17,12 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -35,7 +35,7 @@ jobs:
 
       # platform zip 63MB，缓存下来省下载；解压后体积大、没必要缓存解压结果
       - name: 缓存 platform zip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/android-platform-zip
           key: platform-34-ext7_r02-zip-v1
@@ -120,7 +120,7 @@ jobs:
           echo "版本: $VER"
 
       - name: 上传 APK（正式包）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success()
         with:
           name: app-release
@@ -129,7 +129,7 @@ jobs:
           retention-days: 30
 
       - name: 上传 APK（debug 包）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success()
         with:
           name: app-debug
@@ -138,7 +138,7 @@ jobs:
           retention-days: 30
 
       - name: 上传日志（总是）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: build-logs
@@ -149,7 +149,7 @@ jobs:
           retention-days: 14
 
       - name: 上传失败现场（失败时）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: build-failure
@@ -162,7 +162,7 @@ jobs:
 
       - name: 发布 Release（打 tag 时）
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             zybclean-${{ env.VER }}-universal.apk
