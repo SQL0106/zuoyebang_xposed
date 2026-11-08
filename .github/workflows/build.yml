@@ -81,6 +81,7 @@ jobs:
         run: |
           set -o pipefail
           chmod +x build.sh
+          rm -f zybclean-*.apk          # 先清旧版本产物，避免历史版本的 APK 混进 artifact
           ./build.sh 2>&1 | tee build.log
           DEBUG=1 ./build.sh 2>&1 | tee build-debug.log
 
@@ -110,12 +111,20 @@ jobs:
             || tar czf build-failure.tar.gz build.log build-info.txt failure-context.txt 2>/dev/null || true
           ls -l build-failure.tar.gz 2>&1 || true
 
+      - name: 取版本号
+        shell: bash
+        run: |
+          VER="$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' AndroidManifest.xml | head -1)"
+          test -n "$VER"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "版本: $VER"
+
       - name: 上传 APK（正式包）
         uses: actions/upload-artifact@v4
         if: success()
         with:
           name: app-release
-          path: zybclean-*-universal.apk
+          path: zybclean-${{ env.VER }}-universal.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -124,7 +133,7 @@ jobs:
         if: success()
         with:
           name: app-debug
-          path: zybclean-*-universal-debug.apk
+          path: zybclean-${{ env.VER }}-universal-debug.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -156,6 +165,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            zybclean-*-universal.apk
-            zybclean-*-universal-debug.apk
+            zybclean-${{ env.VER }}-universal.apk
+            zybclean-${{ env.VER }}-universal-debug.apk
           generate_release_notes: true

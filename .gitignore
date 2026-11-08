@@ -25,3 +25,6 @@ libs/api102src/
 libs/api-102.aar
 libs/api-102-sources.jar
 .DumpJs.java
+
+# 构建产物（APK 只走 Release / CI artifact）
+zybclean-*.apk
