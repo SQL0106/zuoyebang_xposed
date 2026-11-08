@@ -110,14 +110,21 @@ jobs:
             || tar czf build-failure.tar.gz build.log build-info.txt failure-context.txt 2>/dev/null || true
           ls -l build-failure.tar.gz 2>&1 || true
 
-      - name: 上传 APK
+      - name: 上传 APK（正式包）
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: zybclean-apks
-          path: |
-            zybclean-*-universal.apk
-            zybclean-*-universal-debug.apk
+          name: app-release
+          path: zybclean-*-universal.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 上传 APK（debug 包）
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: app-debug
+          path: zybclean-*-universal-debug.apk
           if-no-files-found: error
           retention-days: 30
 
