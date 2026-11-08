@@ -81,9 +81,12 @@ public class WebKiller {
             + "var z=t.replace(/\\s/g,'');"
             /* 顶部结果选项卡（#pageNav / navWrap / navBox / navItem_）里也有“AI解题”格子，
                藏它会连带把相邻的“结果N”整格藏掉。导航区内一律跳过。 */
+            /* 导航条一个节点都不许动：只要命中点在 li/ul/nav 里就整段跳过。 */
             + "if((AI.test(z)||z==='问小帮')&&r.height<130){"
-            + "var nav=null;try{nav=el.closest('#pageNav,[class*=\"navWrap\"],[class*=\"navBox\"],[class*=\"navItem_\"]');}catch(e4){}"
-            + "if(!nav)hide(el.closest('li')||el.parentElement||el);}"
+            + "var nav=null;try{nav=el.closest('li,ul,#pageNav,[class*=\"navWrap\"],[class*=\"navBox\"],[class*=\"navItem\"]');}catch(e4){}"
+            + "if(!nav){var p=el.parentElement;"
+            + "if(!p||p.tagName==='LI'||p.tagName==='UL'||p.tagName==='BODY')p=el;"
+            + "hide(p);}}"
             + "if(t.indexOf('讲解')>=0){var p=el;for(var d=0;d<8&&p;d++){"
             + "var cs;try{cs=getComputedStyle(p);}catch(e2){break;}"
             + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){hide(p);break;}p=p.parentElement;}}"
@@ -91,10 +94,16 @@ public class WebKiller {
             /* 顶部选项卡一旦被任何旧规则藏掉，这里强制还原，保证「结果N」都在。 */
             + "function repairNav(){try{"
             + "var ns=document.querySelectorAll('#pageNav [class*=\"navItem\"],[class*=\"navBox\"]>*');"
+            + "var info=[];"
             + "for(var i=0;i<ns.length;i++){var n=ns[i];"
-            + "if(n.style&&n.style.display==='none')n.style.display='';"
-            + "var im=n.querySelector&&n.querySelector('[class*=\"aiSolveTab\"]');"
-            + "if(im&&im.style&&im.style.display==='none')im.style.display='';}"
+            + "var all=[n];"
+            + "try{var ds=n.querySelectorAll('*');for(var j=0;j<ds.length;j++)all.push(ds[j]);}catch(e5){}"
+            + "for(var k=0;k<all.length;k++){var x=all[k];if(!x.style)continue;"
+            + "if(x.style.display==='none')x.style.display='';"
+            + "if(x.style.visibility==='hidden')x.style.visibility='';"
+            + "if(x.style.opacity==='0')x.style.opacity='';}"
+            + "info.push((n.textContent||'').replace(/\\s+/g,'')+'/'+(n.style.display||'-'));}"
+            + "window.__zybNavInfo=info.join(' | ');"
             + "}catch(e){}}"
             /* ---------- 3. 悬浮工具条 ---------- */
             /* 取正文：必须在“活”的 DOM 上走，cloneNode 的 innerText 会退化成 textContent，
@@ -349,6 +358,25 @@ public class WebKiller {
         // 底部蓝色「再拍一页」是原生按钮，长按它唤回浮窗。
         // 只扫一次：绑上就不再扫（BIND_ROOTS 记根 View），绑不上最多再试一次。
         scheduleBind(webView, 0);
+        // 诊断：把网页里顶部选项卡的真实内容打出来，便于确认「结果N」到底存不存在。
+        try {
+            XposedHelpers.callMethod(webView, "postDelayed", new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        XposedHelpers.callMethod(webView, "evaluateJavascript",
+                                "window.__zybNavInfo||'(none)'", new android.webkit.ValueCallback<String>() {
+                                    @Override
+                                    public void onReceiveValue(String value) {
+                                        HookEntry.log("WebKiller nav: " + value);
+                                    }
+                                });
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }, Long.valueOf(5000L));
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 每个根 View 只做一次全树定位，之后不再重复遍历（作业帮页面本来就卡）。 */
