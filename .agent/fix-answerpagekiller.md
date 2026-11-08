@@ -42,3 +42,13 @@
 DELAYS / scanAiEntry / findAiBar / lastIconLabelButton / hasDescendantNamed 以及全局
 Activity.onResume 钩子）已全部删除；本类只保留历史记录页贴底横幅（BANNER_*）。
 底栏原生按钮一律不动（长按唤回浮窗由 WebKiller 负责），H5 部分由 WebKiller 的 JS 负责。
+
+## 追加 2（按用户澄清重做）
+用户：「不是，我是指问小帮要删除」+「那是native的，搜索页是h5」。
+→ 恢复「问小帮」隐藏逻辑，但改为 **native 精确 id + 结构**，零文字匹配：
+- 只对 `com.baidu.homework.activity.search*` 的 Activity.onResume 生效（前缀比较）；
+- `findViewById(0x7f090b96)` = AISearchBottomInputView（兜底按全限定类名找）；
+- 在其中的 `0x7f090be3` 容器里，除「带 0x7f0911f7 的蓝按钮那一支」外，
+  含 TextView 的子项一律 `setVisibility(GONE)`（即「问小帮」入口）；
+- 600/2500ms 两趟，`ASK_DONE` 记 decor，藏掉后不再扫。
+H5 侧（结果页 tab 栏）仍由 WebKiller 的 JS 负责，且导航区一律不碰。

@@ -30,10 +30,155 @@ public class AnswerPageKiller {
 
     public static void install(final ClassLoader cl) {
         try {
+            installAskHelpKiller(cl);
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: ask-help install failed: " + t);
+        }
+        try {
             installRecordBanner(cl);
         } catch (Throwable t) {
             HookEntry.log("AnswerPageKiller install failed: " + t);
         }
+    }
+
+    /* ---------------- 搜题/解答页底栏：「问小帮」原生入口（按 id + 结构，不看文字） ---------------- */
+
+    /** 只在这类页面处理底栏（搜题/解答页），别处不碰。 */
+    private static final String SEARCH_PREFIX = "com.baidu.homework.activity.search";
+
+    /** 底栏本体（真机 dumpsys 实测 14.34.0）：AISearchBottomInputView，整条 1280x210。 */
+    private static final String BOTTOM_BAR_CLASS =
+            "com.baidu.homework.activity.search.newsearchv3.ai.AISearchBottomInputView";
+    private static final int ID_BOTTOM_BAR = 0x7f090b96;
+
+    /** 蓝色按钮容器（839x154）：问小帮是它的兄弟子项，蓝按钮是另一个子项。 */
+    private static final int ID_BLUE_WRAP = 0x7f090be3;
+
+    /** 蓝色按钮可点击层：这个必须留着（长按它唤回浮窗）。 */
+    private static final int ID_BLUE_TAP = 0x7f0911f7;
+
+    /** 每轮补刀时机：底栏晚于 onResume 才 inflate 的情况由第二趟兜底。 */
+    private static final long[] ASK_DELAYS = {600L, 2500L};
+
+    /** 已经处理过的 decor（问小帮藏掉后不再重复扫）。 */
+    private static final WeakHashMap<Object, Boolean> ASK_DONE =
+            new WeakHashMap<Object, Boolean>();
+
+    private static int askLogs;
+
+    private static void installAskHelpKiller(ClassLoader cl) {
+        Class<?> act = XposedHelpers.findClass("android.app.Activity", cl);
+        XposedBridge.hookAllMethods(act, "onResume", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    Object self = param.thisObject;
+                    if (self == null) return;
+                    // 一次前缀比较过滤掉其它 App 页面，不做任何遍历。
+                    if (!self.getClass().getName().startsWith(SEARCH_PREFIX)) return;
+                    Object win = XposedHelpers.callMethod(self, "getWindow");
+                    if (win == null) return;
+                    final Object decor = XposedHelpers.callMethod(win, "getDecorView");
+                    if (!(decor instanceof android.view.View)) return;
+                    final android.view.View root = (android.view.View) decor;
+                    if (ASK_DONE.containsKey(root)) return;
+                    for (long delay : ASK_DELAYS) {
+                        root.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    if (hideAskHelp(root)) {
+                                        ASK_DONE.put(root, Boolean.TRUE);
+                                    }
+                                } catch (Throwable t) {
+                                    HookEntry.log("AnswerPageKiller: ask-help failed: " + t);
+                                }
+                            }
+                        }, delay);
+                    }
+                } catch (Throwable t) {
+                    HookEntry.log("AnswerPageKiller: ask-help schedule failed: " + t);
+                }
+            }
+        });
+        HookEntry.log("AnswerPageKiller: ask-help hook ok");
+    }
+
+    /**
+     * 藏掉底栏里的「问小帮」入口：它和蓝色主按钮同在容器 {@link #ID_BLUE_WRAP} 里，
+     * 结构上是「图标 + 文字」的 LinearLayout，而蓝按钮是带 {@link #ID_BLUE_TAP} 的那一支。
+     * 所以规则是：容器里除蓝按钮那一支之外、含 TextView 的子项全部 GONE。
+     * 全程只读 id 与子节点结构，不读任何文字。
+     */
+    private static boolean hideAskHelp(android.view.View root) {
+        android.view.View bar = null;
+        try {
+            bar = root.findViewById(ID_BOTTOM_BAR);
+        } catch (Throwable ignored) {
+        }
+        if (bar == null) {
+            bar = findByClass(root, BOTTOM_BAR_CLASS, 0);
+        }
+        if (bar == null) {
+            if (askLogs < 3) {
+                askLogs++;
+                HookEntry.log("AnswerPageKiller: probe no bottom bar");
+            }
+            return false;
+        }
+        android.view.View wrap = null;
+        try {
+            wrap = bar.findViewById(ID_BLUE_WRAP);
+        } catch (Throwable ignored) {
+        }
+        if (wrap == null) return false;
+        if (!(wrap instanceof android.view.ViewGroup)) return false;
+
+        int hidden = 0;
+        android.view.ViewGroup g = (android.view.ViewGroup) wrap;
+        for (int i = 0, n = g.getChildCount(); i < n; i++) {
+            android.view.View c = g.getChildAt(i);
+            if (c == null) continue;
+            int id;
+            try {
+                id = c.getId();
+            } catch (Throwable t) {
+                continue;
+            }
+            if (id == ID_BLUE_TAP || c.findViewById(ID_BLUE_TAP) != null) continue; // 蓝按钮本体，保留
+            if (!hasTextView(c, 2)) continue;
+            if (c.getVisibility() != android.view.View.GONE) {
+                c.setVisibility(android.view.View.GONE);
+                hidden++;
+            }
+        }
+        if (hidden > 0) {
+            HookEntry.log("AnswerPageKiller: hid " + hidden + " ask-help entry(ies) in bottom bar");
+        }
+        return hidden > 0;
+    }
+
+    private static android.view.View findByClass(android.view.View v, String name, int depth) {
+        if (v == null || depth > 40) return null;
+        if (name.equals(v.getClass().getName())) return v;
+        if (!(v instanceof android.view.ViewGroup)) return null;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0, n = g.getChildCount(); i < n; i++) {
+            android.view.View r = findByClass(g.getChildAt(i), name, depth + 1);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    private static boolean hasTextView(android.view.View v, int depth) {
+        if (v == null) return false;
+        if (v.getClass().getSimpleName().endsWith("TextView")) return true;
+        if (depth <= 0 || !(v instanceof android.view.ViewGroup)) return false;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0, n = g.getChildCount(); i < n; i++) {
+            if (hasTextView(g.getChildAt(i), depth - 1)) return true;
+        }
+        return false;
     }
 
     /* ---------------- 历史记录页：贴底 VIP 横幅（按几何定位，不看文字） ---------------- */
