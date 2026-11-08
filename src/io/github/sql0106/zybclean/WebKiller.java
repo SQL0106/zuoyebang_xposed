@@ -396,6 +396,56 @@ public class WebKiller {
             list = WEBVIEWS.toArray();
         }
         for (Object o : list) {
+View c = g.getChildAt(i);
+            if (c == null || c instanceof android.webkit.WebView) continue;
+            if (c.getVisibility() != android.view.View.VISIBLE) continue;
+            int cw = c.getWidth();
+            int ch = c.getHeight();
+            if (cw > 0 && ch > 0) {
+                int[] loc = new int[2];
+                c.getLocationOnScreen(loc);
+                int bottom = loc[1] + ch;
+                boolean hit = cw >= rootW * 40 / 100
+                        && ch >= 60 && ch <= 320
+                        && bottom >= rootBottom - 90 && bottom <= rootBottom + 20;
+                if (hit && bindOne(c)) count++;
+            }
+            count = walkBind(c, rootW, rootBottom, depth + 1, count);
+        }
+        return count;
+    }
+
+    private static boolean bindOne(final android.view.View target) {
+        synchronized (BOUND_NATIVE) {
+            if (BOUND_NATIVE.containsKey(target)) return false;
+            BOUND_NATIVE.put(target, Boolean.TRUE);
+        }
+        android.view.View.OnLongClickListener l = new android.view.View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(android.view.View v) {
+                revealBars();
+                return true;
+            }
+        };
+        try {
+            XposedHelpers.callMethod(target, "setOnLongClickListener", l);
+            XposedHelpers.callMethod(target, "setLongClickable", Boolean.TRUE);
+            HookEntry.log("WebKiller native long-press bound: "
+                    + target.getClass().getName() + " " + target.getWidth() + "x" + target.getHeight());
+            return true;
+        } catch (Throwable t) {
+            HookEntry.log("WebKiller native long-press bind failed: " + t);
+            return false;
+        }
+    }
+
+    /** 让所有已登记的 WebView 把悬浮工具条重新显示出来。 */
+    private static void revealBars() {
+        Object[] list;
+        synchronized (WEBVIEWS) {
+            list = WEBVIEWS.toArray();
+        }
+        for (Object o : list) {
             try {
                 XposedHelpers.callMethod(o, "evaluateJavascript",
                         "window.__zybBarShow&&window.__zybBarShow()", null);
