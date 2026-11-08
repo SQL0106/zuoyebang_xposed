@@ -32,6 +32,14 @@ public class HomeChromeKiller {
     private static final String INDEX = "com.baidu.homework.activity.index.IndexActivity";
     private static final String BADGE = "com.zuoyebang.design.badge.BadgeTextView";
 
+    /**
+     * 首页 / 我的页「垃圾卡片」里**不会变的固定文案**（用户 2026-11-08 明确：稳定的文案可以按文字匹配，
+     * 有专门类名的优先按类名）。命中后向上找卡片容器整块 GONE。
+     */
+    private static final String[] JUNK_TEXTS = {
+            "绑定作业帮APP账号",   // 账号推广卡：立即绑定 / 随时了解孩子学习进度
+    };
+
     /** 首屏数据可能晚到，所以只留「首次 + 1 次兜底」两趟（后续生命周期回调直接跳过）。 */
     private static final long[] DELAYS = {600L, 2500L};
     private static final int MAX_PASSES = 2;
@@ -130,8 +138,18 @@ public class HomeChromeKiller {
         List<View> marquees = new ArrayList<View>();
         List<View> icons = new ArrayList<View>();
         List<View> badges = new ArrayList<View>();
-        walk(root, marquees, icons, badges, 0);
-        if (marquees.isEmpty() && icons.isEmpty() && badges.isEmpty()) return;
+        List<View> junk = new ArrayList<View>();
+        walk(root, marquees, icons, badges, junk, 0);
+        if (marquees.isEmpty() && icons.isEmpty() && badges.isEmpty() && junk.isEmpty()) return;
+
+        // 0) 推广卡：稳定文案命中 → 向上找卡片容器整块 GONE
+        for (View tv : junk) {
+            View card = cardOf(tv);
+            if (card != null) hide(card);
+        }
+        if (!junk.isEmpty()) {
+            HookEntry.log("HomeChromeKiller: hide " + junk.size() + " junk card(s)");
+        }
 
         // 1) 搜索框：跑马灯热词的父容器（只到父级，避免连带右侧铃铛/扫码一起没）
         for (View m : marquees) {
@@ -167,7 +185,7 @@ public class HomeChromeKiller {
     }
 
     private static void walk(View v, List<View> marquees, List<View> icons, List<View> badges,
-                             int depth) {
+                             List<View> junk, int depth) {
         if (v == null || depth > MAX_DEPTH) return;
         String simple = v.getClass().getSimpleName();
         if ("XMarqueeView".equals(simple)) {
@@ -177,12 +195,46 @@ public class HomeChromeKiller {
         } else if ("BadgeTextView".equals(simple)) {
             badges.add(v);
         }
+        if (v instanceof android.widget.TextView && isJunkText((android.widget.TextView) v)) {
+            junk.add(v);
+        }
         if (v instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) v;
             for (int i = 0, n = g.getChildCount(); i < n; i++) {
-                walk(g.getChildAt(i), marquees, icons, badges, depth + 1);
+                walk(g.getChildAt(i), marquees, icons, badges, junk, depth + 1);
             }
         }
+    }
+
+    /** 只比对固定文案，取到就返回，不做任何正则 / 分词。 */
+    private static boolean isJunkText(android.widget.TextView tv) {
+        CharSequence cs;
+        try {
+            cs = tv.getText();
+        } catch (Throwable t) {
+            return false;
+        }
+        if (cs == null || cs.length() == 0) return false;
+        String s = cs.toString();
+        for (String k : JUNK_TEXTS) {
+            if (s.contains(k)) return true;
+        }
+        return false;
+    }
+
+    /** 文字节点 → 卡片容器：向上最多 6 层，找高度足够的 ConstraintLayout；找不到就退到父容器。 */
+    private static View cardOf(View textView) {
+        View cur = textView;
+        for (int i = 0; i < 6; i++) {
+            ViewParent parent = cur.getParent();
+            if (!(parent instanceof View)) break;
+            cur = (View) parent;
+            if (cur.getClass().getSimpleName().contains("ConstraintLayout") && cur.getHeight() >= 300) {
+                return cur;
+            }
+        }
+        ViewParent p = textView.getParent();
+        return p instanceof View ? (View) p : null;
     }
 
     private static void hide(View view) {

@@ -100,3 +100,21 @@
 改法：Pointer Events + setPointerCapture（触摸/鼠标都支持，无 PointerEvent 回退 touch）、
 `touch-action:none`、按下/抬起用 act 标志、clamp 按 offsetWidth/offsetHeight 夹在视口内。
 自检：`.agent/snips/drag-smoke.js`（DRAG_ALL_PASS，11 项）+ `smoke.js`（SMOKE_ALL_PASS）。
+
+## 追加：拖动浮窗时页面跟着一起滚（用户 2026-11-08）
+现象：拖 #zyb-bar，浮窗跟着动，**页面也一起滚**。
+根因：光靠 CSS `touch-action:none` 不够。
+- 若页面滚动是 WebView 内部滚动 → 需要**在按下时就 preventDefault**（等位移超过阈值再阻止已经晚了，滚动早就启动）；
+- 若滚动实际发生在 WebView 之外的原生滚动容器（答案页的 NestedScrollView/RecyclerView、或侧滑返回 SwapBackLayout）
+  → JS 无论如何都拦不住，必须让原生父级不抢事件。
+
+修法（三层）：
+1. `pointerdown` 立刻 `preventDefault()`（cancelable 时），滚动不启动；
+2. 拖动期间在 `window` 上挂 `touchmove` 监听，`{capture:true, passive:false}` 且 `preventDefault()`
+   —— 把页面内部滚动也吃掉；`pointerup/pointercancel` 立即摘掉；
+3. Java 桥新增 `zybcleanHost.lockTouch(boolean)`（`H5Bridge.lockTouch`）：主线程上对 WebView 的
+   **所有父级** `requestDisallowInterceptTouchEvent(lock)`，按下锁、松手解锁。
+另加：`bar.style.setProperty('touch-action','none','important')` 顶掉页面可能的 !important 覆盖；
+手指一动就取消 700ms 长按隐藏（避免刚按住准备拖时浮窗自己消失）。
+自检：`.agent/snips/drag-smoke.js` 扩到 16 项，新增 lockTouch(true/false)、touchmove 被动标志、
+preventDefault 命中、松手摘监听 —— `DRAG_ALL_PASS`。

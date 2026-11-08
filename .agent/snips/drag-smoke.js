@@ -5,6 +5,8 @@ const js = fs.readFileSync('/home/SQL916/zuoyebang_xposed/.agent/snips/webkiller
 
 const timeouts = [];
 let saved = null;
+const winListeners = [];
+const lockCalls = [];
 
 function El(tag) {
   this.tagName = tag || 'DIV';
@@ -70,6 +72,16 @@ const document = {
 
 const sandbox = {
   document,
+  addEventListener(t, fn, opt) { winListeners.push([t, fn, opt]); },
+  removeEventListener(t, fn) {
+    for (let i = winListeners.length - 1; i >= 0; i--) {
+      if (winListeners[i][0] === t && winListeners[i][1] === fn) winListeners.splice(i, 1);
+    }
+  },
+  zybcleanHost: {
+    lockTouch(lock) { lockCalls.push(lock); },
+    toast() {}
+  },
   location: { href: 'https://example.test/answer' },
   innerWidth: 1080, innerHeight: 800,
   navigator: {},
@@ -116,6 +128,15 @@ chk('纵向拖动生效 ' + startTop + ' → ' + bar.style.top,
     parseFloat(bar.style.top) === startTop - 200);
 chk('setPointerCapture 已拿走指针', bar.captured === true);
 
+// 拖动期间必须锁住原生父级，并挂上非被动 touchmove 吃掉页面滚动
+chk('pointerdown 已调用 lockTouch(true)', lockCalls[0] === true);
+const tm = winListeners.filter(function (x) { return x[0] === 'touchmove'; })[0];
+chk('window 上挂了 touchmove 且 passive:false',
+    tm && tm[2] && tm[2].passive === false && tm[2].capture === true);
+let prevented = 0;
+if (tm) tm[1]({ cancelable: true, preventDefault: function () { prevented++; } });
+chk('touchmove 已经 preventDefault（页面不跟着滚）', prevented === 1);
+
 // 越界：拖到屏幕外 → 必须被夹在可视区内
 bar.dispatch('pointermove', { pointerId: 1, clientX: 9999, clientY: 9999, cancelable: true, preventDefault() {} });
 chk('右下越界被夹住 x=' + bar.style.left + ' y=' + bar.style.top,
@@ -126,6 +147,9 @@ chk('左上越界被夹住 x=' + bar.style.left + ' y=' + bar.style.top,
     parseFloat(bar.style.left) === 0 && parseFloat(bar.style.top) === 0);
 
 bar.dispatch('pointerup', { pointerId: 1, clientX: 0, clientY: 0 });
+chk('pointerup 已解锁 lockTouch(false)', lockCalls[lockCalls.length - 1] === false);
+chk('松手后 touchmove 监听已摘掉',
+    winListeners.filter(function (x) { return x[0] === 'touchmove'; }).length === 0);
 chk('拖动后位置已写入 localStorage: ' + saved, saved === '0,0');
 
 // 别的指针 id 不该干扰

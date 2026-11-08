@@ -28,3 +28,7 @@ libs/api-102-sources.jar
 
 # 构建产物（APK 只走 Release / CI artifact）
 zybclean-*.apk
+
+# 真机 dump（体积大，结论写进 .agent/fix-*.md 即可）
+.agent/snips/top*.txt
+.agent/snips/w[6-9].txt

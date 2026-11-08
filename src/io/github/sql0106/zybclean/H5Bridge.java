@@ -95,6 +95,30 @@ public final class H5Bridge {
         return new H5Bridge(context, null).store(sanitize(name, mime), mime, data);
     }
 
+    /**
+     * 页面里的浮窗被拖动时，临时让 WebView 的父级（原生滚动容器 / 侧滑返回 SwapBackLayout）
+     * 不要拦截触摸；松手后恢复。只影响 WebView 之外的原生父级，不碰页面自身滚动。
+     */
+    @JavascriptInterface
+    public void lockTouch(final boolean lock) {
+        final android.webkit.WebView wv = mWebView;
+        if (wv == null) return;
+        mMain.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    android.view.ViewParent p = wv.getParent();
+                    int guard = 0;
+                    while (p != null && guard++ < 32) {
+                        p.requestDisallowInterceptTouchEvent(lock);
+                        p = p.getParent();
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+    }
+
     @JavascriptInterface
     public void copyText(final String text) {
         if (text == null || text.length() == 0) return;

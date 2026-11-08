@@ -40,6 +40,11 @@ public class HookEntry extends XposedModule {
             log("AdBlocker install failed", t);
         }
         try {
+            AdCardKiller.install(cl);
+        } catch (Throwable t) {
+            log("AdCardKiller install failed", t);
+        }
+        try {
             FeedKiller.install(cl);
         } catch (Throwable t) {
             log("FeedKiller install failed", t);

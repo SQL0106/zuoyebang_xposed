@@ -227,8 +227,10 @@ public class WebKiller {
             + "bar.style.cssText='position:fixed;left:'+Math.round(lx)+'px;top:'+Math.round(ly)+'px;"
             + "z-index:2147483647;display:flex;flex-direction:column;gap:8px;"
             /* touch-action:none 是关键：不加的话浏览器会把手势判成滚动并派发 touchcancel，
-               拖动到一半就断，看起来就是「拖不动」。 */
+               拖动到一半就断，看起来就是「拖不动」。页面自己可能用 !important 覆盖，
+               所以再用 setProperty(...,'important') 顶一次。 */
             + "touch-action:none;-webkit-user-select:none;user-select:none;cursor:move;';"
+            + "try{bar.style.setProperty('touch-action','none','important');}catch(e7){}"
             + "bar.style.opacity=String(window.__zybBarOp||1);"
             + "function mk(txt,color,fn){var b=document.createElement('div');b.textContent=txt;"
             + "b.style.cssText='padding:8px 12px;border-radius:16px;color:#fff;font-size:13px;"
@@ -237,22 +239,30 @@ public class WebKiller {
             + "b.addEventListener('click',function(e){e.stopPropagation();e.preventDefault();"
             /* 拖动结束会补发一次 click，用它拦住误触。 */
             + "if(window.__zybBarMoved){window.__zybBarMoved=0;return;}fn();},true);return b;}"
-            /* 拖动统一走 Pointer Events（触摸/鼠标都覆盖），并用 setPointerCapture 拿住指针：
-               事件不会被页面里的滚动容器/原生侧滑(SwapBackLayout)抢走。 */
+            /* 拖动统一走 Pointer Events（触摸/鼠标都覆盖），并用 setPointerCapture 拿住指针。
+               三条兜底专治「拖浮窗时页面跟着一起滚」：
+                 ① pointerdown 立刻 preventDefault，滚动不启动；
+                 ② 拖动期间在 window 上挂非被动 touchmove 并 preventDefault（页面内部滚动也吃掉）；
+                 ③ Java 桥 lockTouch() 让 WebView 的父级（原生滚动容器/侧滑返回）不抢事件。 */
             + "var px=0,py=0,ox=0,oy=0,drag=0,pid=null,act=0;"
+            + "function stopScroll(e){if(e&&e.cancelable)e.preventDefault();}"
             + "function barW(){return bar.offsetWidth||86;}"
             + "function barH(){return bar.offsetHeight||200;}"
             + "function down(e){var r=bar.getBoundingClientRect();ox=r.left;oy=r.top;"
             + "px=e.clientX;py=e.clientY;drag=0;act=1;pid=(e.pointerId===undefined?null:e.pointerId);"
             + "window.__zybBarMoved=0;"
+            + "try{if(e.cancelable)e.preventDefault();}catch(e3){}"
+            + "var h=H();if(h&&h.lockTouch){try{h.lockTouch(true);}catch(e4){}}"
+            + "try{window.addEventListener('touchmove',stopScroll,{capture:true,passive:false});}catch(e5){}"
             + "try{if(pid!==null)bar.setPointerCapture(pid);}catch(e2){}"
-            /* 长按 700ms 整条消失；本页内不再出现，换页/再拍一页重新注入时自然恢复。 */
+            /* 长按 700ms 且手指一直没动 → 整条消失；本页内不再出现，换页/再拍一页重新注入时自然恢复。 */
             + "clearTimeout(window.__zybHold);"
             + "window.__zybHold=setTimeout(function(){if(!drag){window.__zybBarOp=0;bar.style.display='none';}},700);}"
             + "function move(e){if(!act)return;"
             + "if(e.pointerId!==undefined&&pid!==null&&e.pointerId!==pid)return;"
             + "var mx=e.clientX-px,my=e.clientY-py;"
-            + "if(!drag&&(Math.abs(mx)>6||Math.abs(my)>6)){drag=1;window.__zybBarMoved=1;clearTimeout(window.__zybHold);}"
+            + "if(mx||my)clearTimeout(window.__zybHold);"   /* 手指一动就取消长按隐藏 */
+            + "if(!drag&&(Math.abs(mx)>6||Math.abs(my)>6)){drag=1;window.__zybBarMoved=1;}"
             + "if(!drag)return;if(e.cancelable)e.preventDefault();"
             + "var nx=ox+mx,ny=oy+my,"
             + "maxX=Math.max(0,window.innerWidth-barW()),maxY=Math.max(0,window.innerHeight-barH());"
@@ -262,6 +272,8 @@ public class WebKiller {
             + "if(e.pointerId!==undefined&&pid!==null&&e.pointerId!==pid)return;"
             + "act=0;pid=null;"
             + "clearTimeout(window.__zybHold);"
+            + "try{window.removeEventListener('touchmove',stopScroll,{capture:true});}catch(e8){}"
+            + "var h=H();if(h&&h.lockTouch){try{h.lockTouch(false);}catch(e9){}}"
             + "if(drag){var r=bar.getBoundingClientRect();"
             + "try{localStorage.setItem('zyb_bar_pos',Math.round(r.left)+','+Math.round(r.top));}catch(e1){}"
             + "setTimeout(function(){window.__zybBarMoved=0;},150);}}"
@@ -271,7 +283,8 @@ public class WebKiller {
             + "bar.addEventListener('pointerup',up,true);"
             + "bar.addEventListener('pointercancel',up,true);"
             + "}else{"
-            + "bar.addEventListener('touchstart',function(e){var t=e.touches[0];if(t)down(t);},true);"
+            + "bar.addEventListener('touchstart',function(e){var t=e.touches[0];"
+            + "if(t){if(e.cancelable)e.preventDefault();down(t);}},{capture:true,passive:false});"
             + "bar.addEventListener('touchmove',function(e){var t=e.touches[0];if(t)move(t);},true);"
             + "bar.addEventListener('touchend',up,true);"
             + "bar.addEventListener('touchcancel',up,true);}"
