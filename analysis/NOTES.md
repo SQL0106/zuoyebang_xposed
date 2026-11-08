@@ -651,3 +651,27 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 - JS 三份全部 `node --check` 通过：`WebKiller.JS` 7,389 B、`PageShot.PREP` 1,619 B、`PageShot.RESTORE` 260 B
   （DumpJs 改成扫 `WebKiller`/`PageShot` 两个类的 String 常量，输出到 `build/jscheck/*.js`）。
 - dex 含 `PageShot`（9 处）/`zybShot`（3 处）/`saveBytes`；包内 `META-INF/xposed/*` 齐全。
+
+## 27. 2026-11-08 —— 长截图修正：原生滚动模式 + 剔除视频讲解与广告（1.2.2）
+
+用户反馈两张实测图与要求：
+- 「生成的图片长这样」（图：只有第一屏有内容，下面大片空白，工具条也没被隐藏）→ 说明**实际滚动发生在原生外层容器**，WebView 被撑成整页高度，Chromium 只栅格化可见区域，`wv.draw()` 拍不到没上屏的部分；JS `scrollTo` 也滚不动。
+- 「把视频讲解的部分不要截到，已经一下垃圾广告也是。」
+
+### 修法
+1. **双模式**：
+   - `MODE_JS`：`scrollHeight > clientHeight + 8`（网页自己真能滚）→ 沿用 `scrollTo(y)`；
+   - `MODE_NATIVE`：否则若 `wv.getHeight() > 可见高度 + 8` → WebView 是被撑高的，改为用 `View#scrollBy` 滚**最近的可滚动祖先**（`findScroller` 用「scrollBy(0,1) 后 getScrollY 变了」探测，兼容 NestedScrollView/RecyclerView），每屏**只裁 `getGlobalVisibleRect` 那块**再拼接，最后 `scrollTo` 还原；
+   - `MODE_SINGLE`：一屏装得下，直接拍。
+2. **裁剪改用可见矩形**（`wv.getGlobalVisibleRect` 换算成 WebView 本地坐标），不再假设整块 WebView 都是有效内容。
+3. **剔除垃圾后再拍**：PREP 里加 kill pass ——
+   - `VIDEO`/`IFRAME` 整块隐藏；
+   - class/id 命中 `ad|ads|advert|banner|promo|gg` 且高度 60~0.6 视口的容器隐藏；
+   - 文本（≤40 字）命中 `本题精讲 / 讲解(中|视频) / 视频讲解 / 双十一 / ^广告$ / 开通会员 / 立即开通 / 限时 / 秒杀 / 领券 / 领取` → `upHide()` 向上最多 5 层找「高度≥60 且宽≥50% 视口」的块级容器隐藏，避免只把文字抹掉留个空卡片。
+   - **PREP 自带 `hide()`**（之前误用了 WebKiller 里的同名函数，独立执行时会 ReferenceError）；隐藏元素统一进 `hidden[]`，结束时还原。
+4. **诊断日志**：启动打 `mode / css尺寸 / client / innerH / rect / wv尺寸 / vis / scroller 类名 / steps / out`，每屏打 `js step want/actual` 或 `native step y/delta`；保存时打 size/路径。找不到可滚动祖先会明确报「找不到可滚动的外层容器」。
+
+### 验证
+- `./build.sh` → BUILD_OK，`zybclean.apk` **49,776 B**，`1.2.2 (6)`，签名不变。
+- JS 三份 `node --check` 全过：WebKiller.JS 7,389 B、PageShot.PREP **2,745 B**、RESTORE 300 B。
+- 待真机验证：滚动模式判定、拼接是否有重复/空白、视频讲解与双十一 banner 是否已消失。
