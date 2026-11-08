@@ -337,66 +337,26 @@ public class WebKiller {
             if (w <= 0 || h <= 0) return;
             int[] loc = new int[2];
             rv.getLocationOnScreen(loc);
-            walkBind(rv, w, loc[1] + h, 0);
+            int bound = walkBind(rv, w, loc[1] + h, 0, 0);
+            if (bound > 0 || bindLogs < 6) {
+                bindLogs++;
+                HookEntry.log("WebKiller bind native: root=" + w + "x" + h
+                        + " bottom=" + (loc[1] + h) + " bound=" + bound);
+            }
         } catch (Throwable t) {
             HookEntry.log("WebKiller bind native failed: " + t);
         }
     }
 
-    private static void walkBind(android.view.View v, int rootW, int rootBottom, int depth) {
-        if (!(v instanceof android.view.ViewGroup)) return;
-        if (depth > 40) return;
+    private static int bindLogs;
+
+    private static int walkBind(android.view.View v, int rootW, int rootBottom, int depth, int count) {
+        if (!(v instanceof android.view.ViewGroup)) return count;
+        if (depth > 40) return count;
         android.view.ViewGroup g = (android.view.ViewGroup) v;
         int n = g.getChildCount();
         for (int i = 0; i < n; i++) {
             android.view.View c = g.getChildAt(i);
-            if (c == null || c instanceof android.webkit.WebView) continue;
-            if (c.getVisibility() != android.view.View.VISIBLE) continue;
-            int cw = c.getWidth();
-            int ch = c.getHeight();
-            if (cw > 0 && ch > 0) {
-                int[] loc = new int[2];
-                c.getLocationOnScreen(loc);
-                int bottom = loc[1] + ch;
-                boolean hit = cw >= rootW * 40 / 100
-                        && ch >= 60 && ch <= 320
-                        && bottom >= rootBottom - 90 && bottom <= rootBottom + 20;
-                if (hit) bindOne(c);
-            }
-            walkBind(c, rootW, rootBottom, depth + 1);
-        }
-    }
-
-    private static void bindOne(final android.view.View target) {
-        synchronized (BOUND_NATIVE) {
-            if (BOUND_NATIVE.containsKey(target)) return;
-            BOUND_NATIVE.put(target, Boolean.TRUE);
-        }
-        android.view.View.OnLongClickListener l = new android.view.View.OnLongClickListener() {
-            @Override
-            public boolean onLongClick(android.view.View v) {
-                revealBars();
-                return true;
-            }
-        };
-        try {
-            XposedHelpers.callMethod(target, "setOnLongClickListener", l);
-            XposedHelpers.callMethod(target, "setLongClickable", Boolean.TRUE);
-            HookEntry.log("WebKiller native long-press bound: "
-                    + target.getClass().getName() + " " + target.getWidth() + "x" + target.getHeight());
-        } catch (Throwable t) {
-            HookEntry.log("WebKiller native long-press bind failed: " + t);
-        }
-    }
-
-    /** 让所有已登记的 WebView 把悬浮工具条重新显示出来。 */
-    private static void revealBars() {
-        Object[] list;
-        synchronized (WEBVIEWS) {
-            list = WEBVIEWS.toArray();
-        }
-        for (Object o : list) {
-View c = g.getChildAt(i);
             if (c == null || c instanceof android.webkit.WebView) continue;
             if (c.getVisibility() != android.view.View.VISIBLE) continue;
             int cw = c.getWidth();
