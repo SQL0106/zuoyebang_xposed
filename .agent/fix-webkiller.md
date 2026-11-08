@@ -90,3 +90,13 @@
 5. `bindOne` 已绑定返回 true：`bindNativeLongPress` 会因此落 `BIND_ROOTS`，若同一根 View 上后来换了
    可点层（App 动态重建底栏），将不再重新绑定——靠 Activity onResume 的新 decor 兜底。
 6. `myGen==1` 才 `scheduleBind`：首导航若发生在 `about:blank`，绑定依赖 1800ms 后的重试(1 次) + onResume 兜底。
+
+## 追加：浮窗拖动修好（用户：这个控件为什么不能自由拖动）
+原因四条：
+1. `#zyb-bar` 没有 `touch-action:none` → Chromium 把手势判成滚动，派 `touchcancel`，拖到一半就断；
+2. 只监听 touch，且要位移 >6px 才 `preventDefault()`，第一次超阈值的 move 常已被滚动接管；
+3. 没 setPointerCapture，手指移出控件就不再收到 move；
+4. 边界 clamp 用固定 30px（`innerWidth-30`），不是控件实际尺寸，看起来"拖不过去"。
+改法：Pointer Events + setPointerCapture（触摸/鼠标都支持，无 PointerEvent 回退 touch）、
+`touch-action:none`、按下/抬起用 act 标志、clamp 按 offsetWidth/offsetHeight 夹在视口内。
+自检：`.agent/snips/drag-smoke.js`（DRAG_ALL_PASS，11 项）+ `smoke.js`（SMOKE_ALL_PASS）。
