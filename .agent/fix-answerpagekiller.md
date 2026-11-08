@@ -35,3 +35,10 @@
 - 隐藏「问小帮」依赖结构判定；若某版本按钮组里出现高度不一致的项（如某按钮换行），该组不再命中 → 不隐藏（宁漏不误伤）。
 - `LOC`、`baseY`、日志计数都是静态字段，按「都跑在主线程」假设；若哪天在非主线程调用 `killBottomBanner` 需改为线程局部。
 - `WORTH` 加了 synchronized（HashMap 非线程安全，防线上低概率并发 onCreate/onResume）。
+
+## 追加（主会话按用户要求回退）
+用户 2026-11-08：「问小帮恢复，而且那是native的，搜索页是h5。」
+→ 整个「问小帮」隐藏链路（AI_BAR_CLASS / AI_SCAN_DEPTH / AI_DONE / PAGE_PREFIX / WORTH /
+DELAYS / scanAiEntry / findAiBar / lastIconLabelButton / hasDescendantNamed 以及全局
+Activity.onResume 钩子）已全部删除；本类只保留历史记录页贴底横幅（BANNER_*）。
+底栏原生按钮一律不动（长按唤回浮窗由 WebKiller 负责），H5 部分由 WebKiller 的 JS 负责。
