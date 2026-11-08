@@ -119,21 +119,23 @@ jobs:
           echo "VER=$VER" >> "$GITHUB_ENV"
           echo "版本: $VER"
 
-      - name: 上传 APK（正式包）
+      # archive:false → 直接以 APK 原文件上传，不再包成 zip；
+      # 此时 artifact 名就是文件名（zybclean-<版本>-universal[-debug].apk）。
+      - name: 上传 APK（正式包，不打包）
         uses: actions/upload-artifact@v7
         if: success()
         with:
-          name: app-release
           path: zybclean-${{ env.VER }}-universal.apk
+          archive: false
           if-no-files-found: error
           retention-days: 30
 
-      - name: 上传 APK（debug 包）
+      - name: 上传 APK（debug 包，不打包）
         uses: actions/upload-artifact@v7
         if: success()
         with:
-          name: app-debug
           path: zybclean-${{ env.VER }}-universal-debug.apk
+          archive: false
           if-no-files-found: error
           retention-days: 30
 
