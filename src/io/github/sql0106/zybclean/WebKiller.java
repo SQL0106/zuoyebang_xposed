@@ -4,8 +4,9 @@ import io.github.sql0106.zybclean.compat.XC_MethodHook;
 import io.github.sql0106.zybclean.compat.XposedBridge;
 import io.github.sql0106.zybclean.compat.XposedHelpers;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Set;
 import java.util.WeakHashMap;
 
 /**
@@ -14,7 +15,7 @@ import java.util.WeakHashMap;
  *
  * <p>注入的幂等脚本做四件事：</p>
  * <ol>
- *   <li>干掉「AI解题 / AI讲题 / 问小帮」tab 与「讲解中」视频浮卡；</li>
+ *   <li>按真实 class / 定位方式干掉 AI 入口与视频推广浮卡（<b>绝不按文案匹配</b>，用户死线）；</li>
  *   <li>解除页面的选中/复制限制（user-select + 事件拦截），让长按能直接选字复制；</li>
  *   <li>右下角挂四个悬浮按钮：<b>复制内容</b>（整页题目+解答文本进剪贴板）、
  *       <b>存题目 / 存解答</b>（原生整页截图后按「答案」标题切段，公式排版原样保留，见 {@link PageShot}）、
@@ -28,9 +29,20 @@ import java.util.WeakHashMap;
 public class WebKiller {
 
     private static final int MAX_WEBVIEWS = 8;
-    private static final long[] DELAYS = {1200L, 3000L, 6000L, 12000L};
+    /** 每次导航只排 2 次注入：1200ms 管首屏，6000ms 管懒加载 / SPA 二次渲染。 */
+    private static final long[] INJECT_DELAYS = {1200L, 6000L};
 
-    private static final List<Object> WEBVIEWS = new ArrayList<Object>();
+    /**
+     * 已登记的 WebView。<b>必须弱引用</b>：WebView 的 Context 是 Activity，
+     * 强引用最多 8 个等于钉住 8 个已销毁的搜题/解答页（每个几十 MB）。
+     */
+    private static final Set<Object> WEBVIEWS =
+            Collections.newSetFromMap(new WeakHashMap<Object, Boolean>());
+    /**
+     * 每个 WebView 的注入代次：新导航自增，旧导航排下的 Runnable 发现代次不符就直接 no-op，
+     * 不会再把上一页的脚本 / {@code __zybNavInfo} 刷回新文档。
+     */
+    private static final WeakHashMap<Object, int[]> GEN = new WeakHashMap<Object, int[]>();
     private static final WeakHashMap<Object, Boolean> BRIDGED = new WeakHashMap<Object, Boolean>();
     /** 已经挂过长按监听的原生 View（底部蓝色按钮），避免重复挂。 */
     private static final WeakHashMap<Object, Boolean> BOUND_NATIVE = new WeakHashMap<Object, Boolean>();
@@ -68,29 +80,42 @@ public class WebKiller {
             + "[class*=\"new-poster\"],[class*=\"biz-poster\"]{display:none!important}';"
             + "(document.head||document.documentElement).appendChild(st2);}catch(e){}"
 
-            /* ---------- 2. 干掉垃圾 DOM ---------- */
-            + "var AI=/^AI(解题|讲题|答疑)$/i;"
+            /* ---------- 2. 干掉垃圾 DOM（只用结构 / class 判定） ---------- */
+            /* 用户死线：禁止「取 textContent → 正则/字符串比较 → 隐藏祖先」。
+               所以这里一个字都不看：AI 入口按 class / data-role 找，视频浮卡按 class + 定位方式找。
+               导航条（#pageNav / ul / li / nav / navWrap / navBox / navItem）内任何节点一律不碰。 */
+            + "var WS1=/\\s+/g,WS0=/\\s/g;"
+            + "var NAVSEL='#pageNav,[class*=\"navWrap\"],[class*=\"navBox\"],[class*=\"navItem\"],nav,ul,li';"
+            + "function inNav(el){try{return !!(el&&el.closest&&el.closest(NAVSEL));}catch(e){return false;}}"
+            + "var KILLSEL='[class*=\"ai-tab\"],[class*=\"aiTab\"],[class*=\"ai-tabs\"],[class*=\"ai-entry\"],"
+            + "[class*=\"aiEntry\"],[class*=\"ai-solve\"],[class*=\"aiSolve\"],[class*=\"ai-assistant\"],"
+            + "[class*=\"aiAssistant\"],[data-role=\"ai\"]';"
+            /* 两阶段：第一趟只读（每个候选一次 rect），第二趟统一写。
+               边读边写会让每个 display:none 触发一次同步重排（layout thrash）。 */
             + "function scanKill(){try{"
-            + "var els=document.querySelectorAll('div,span,li,a,button,p,section,em,strong');"
-            + "var n=els.length>2500?2500:els.length;"
-            + "for(var i=0;i<n;i++){var el=els[i];"
-            + "if(el.childElementCount>4)continue;"
-            + "var t=(el.textContent||'').replace(/\\s+/g,' ').trim();"
-            + "if(!t||t.length>30)continue;"
+            + "var els=document.querySelectorAll(KILLSEL);"
+            + "var n=els.length>200?200:els.length,hit=[];"
+            + "for(var i=0;i<n;i++){var el=els[i];if(inNav(el))continue;"
             + "var r;try{r=el.getBoundingClientRect();}catch(e3){continue;}"
-            + "var z=t.replace(/\\s/g,'');"
-            /* 顶部结果选项卡（#pageNav / navWrap / navBox / navItem_）里也有“AI解题”格子，
-               藏它会连带把相邻的“结果N”整格藏掉。导航区内一律跳过。 */
-            /* 导航条一个节点都不许动：只要命中点在 li/ul/nav 里就整段跳过。 */
-            + "if((AI.test(z)||z==='问小帮')&&r.height<130){"
-            + "var nav=null;try{nav=el.closest('li,ul,#pageNav,[class*=\"navWrap\"],[class*=\"navBox\"],[class*=\"navItem\"]');}catch(e4){}"
-            + "if(!nav){var p=el.parentElement;"
-            + "if(!p||p.tagName==='LI'||p.tagName==='UL'||p.tagName==='BODY')p=el;"
-            + "hide(p);}}"
-            + "if(t.indexOf('讲解')>=0){var p=el;for(var d=0;d<8&&p;d++){"
-            + "var cs;try{cs=getComputedStyle(p);}catch(e2){break;}"
-            + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){hide(p);break;}p=p.parentElement;}}"
-            + "}}catch(e){}}"
+            + "if(r.height<130)hit.push(el);}"
+            + "for(var k=0;k<hit.length;k++){var e2=hit[k];var p=e2.parentElement;"
+            + "if(!p||p.tagName==='BODY'||p.tagName==='HTML'||p.tagName==='LI'||p.tagName==='UL'||p.tagName==='NAV')p=e2;"
+            + "if(inNav(p))continue;hide(p);}"
+            + "}catch(e){}}"
+            /* 悬浮的「讲解中 / 本题精讲」播放卡：class 含 video/poster/player，外层是 fixed/sticky，
+               且高度不足 60% 视口（全屏播放器不碰）。同样不看文字。 */
+            + "var FLOATSEL='[class*=\"video\"],[class*=\"poster\"],[class*=\"player\"]';"
+            + "function scanFloat(){try{"
+            + "var els=document.querySelectorAll(FLOATSEL);"
+            + "var n=els.length>120?120:els.length,hit=[];"
+            + "for(var i=0;i<n;i++){var el=els[i];if(inNav(el))continue;"
+            + "var p=el,fx=null;"
+            + "for(var d=0;d<8&&p;d++){var cs;try{cs=getComputedStyle(p);}catch(e2){break;}"
+            + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){fx=p;break;}p=p.parentElement;}"
+            + "if(!fx||inNav(fx))continue;"
+            + "if(fx.clientHeight<window.innerHeight*0.6)hit.push(fx);}"
+            + "for(var k=0;k<hit.length;k++)hide(hit[k]);"
+            + "}catch(e){}}"
             /* 顶部选项卡一旦被任何旧规则藏掉，这里强制还原，保证「结果N」都在。 */
             + "function repairNav(){try{"
             + "var ns=document.querySelectorAll('#pageNav [class*=\"navItem\"],[class*=\"navBox\"]>*');"
@@ -102,7 +127,7 @@ public class WebKiller {
             + "if(x.style.display==='none')x.style.display='';"
             + "if(x.style.visibility==='hidden')x.style.visibility='';"
             + "if(x.style.opacity==='0')x.style.opacity='';}"
-            + "info.push((n.textContent||'').replace(/\\s+/g,'')+'/'+(n.style.display||'-'));}"
+            + "info.push((n.textContent||'').replace(WS1,'')+'/'+(n.style.display||'-'));}"
             + "window.__zybNavInfo=info.join(' | ');"
             + "}catch(e){}}"
             /* ---------- 3. 悬浮工具条 ---------- */
@@ -115,7 +140,7 @@ public class WebKiller {
             + "HEADER:1,FOOTER:1,MAIN:1,ASIDE:1,NAV:1,FIGURE:1,FIGCAPTION:1};"
             + "var DROP={'本题精讲':1,'讲解中':1,'问小帮':1,'AI解题':1,'AI讲题':1,'AI答疑':1,"
             + "'复制内容':1,'下载图片':1,'展开':1,'收起':1,'查看解析':1,'答案解析':0};"
-            + "function normTex(s){return String(s||'').replace(/\\s+/g,' ').trim();}"
+            + "function normTex(s){return String(s||'').replace(WS1,' ').trim();}"
             + "function vis(e){try{var cs=getComputedStyle(e);"
             + "if(cs.display==='none'||cs.visibility==='hidden'||cs.opacity==='0')return false;"
             + "if(e.getAttribute&&e.getAttribute('aria-hidden')==='true')return false;"
@@ -124,7 +149,7 @@ public class WebKiller {
             + "return true;}catch(x){return true;}}"
             + "function imgTex(im){var ks=['data-latex','data-tex','alt','title','aria-label'];"
             + "for(var i=0;i<ks.length;i++){var v=im.getAttribute(ks[i]);"
-            + "if(v&&v.replace(/\\s/g,'')){var s=v.trim();return /[\\\\^_{}]/.test(s)&&s.indexOf('$')<0?('$'+s+'$'):s;}}"
+            + "if(v&&v.replace(WS0,'')){var s=v.trim();return /[\\\\^_{}]/.test(s)&&s.indexOf('$')<0?('$'+s+'$'):s;}}"
             + "var s2=im.getAttribute('src')||'';"
             + "var m=/[?&](?:tex|latex|formula|text)=([^&]+)/i.exec(s2);"
             + "if(m){try{return '$'+decodeURIComponent(m[1])+'$';}catch(x){return '';}}"
@@ -147,7 +172,7 @@ public class WebKiller {
             + "var mt=mathTex(e);if(!mt)mt=normTex(e.textContent);"
             + "if(mt){out.push('$'+mt+'$');FC++;}return;}"
             + "if(e.nodeType===3){var tx=e.nodeValue;"
-            + "if(tx&&tx.replace(/\\s/g,'')){if(vis(e.parentNode||e))out.push(tx);}return;}"
+            + "if(tx&&tx.replace(WS0,'')){if(vis(e.parentNode||e))out.push(tx);}return;}"
             + "if(!vis(e))return;"
             + "var n=e.childNodes?e.childNodes.length:0;"
             + "for(var i=0;i<n;i++)walk(e.childNodes[i],out,d+1);"
@@ -156,7 +181,7 @@ public class WebKiller {
             + "var s=out.join('').replace(/\\r/g,'').replace(/[ \\t\\u00a0]+/g,' ');"
             + "s=s.replace(/ *\\n */g,'\\n').replace(/\\n{3,}/g,'\\n\\n').trim();"
             + "var lines=s.split('\\n'),keep=[];"
-            + "for(var i=0;i<lines.length;i++){var L=lines[i].replace(/\\s/g,'');"
+            + "for(var i=0;i<lines.length;i++){var L=lines[i].replace(WS0,'');"
             + "if(!L)continue;if(DROP[L])continue;keep.push(lines[i]);}"
             + "return keep.join('\\n').slice(0,200000);}catch(e){return '';}}"
             + "function legacyCopy(t){var ta=document.createElement('textarea');ta.value=t;"
@@ -246,21 +271,36 @@ public class WebKiller {
             + "if(b){b.style.display='flex';b.style.opacity='1';"
             + "var hb=b.querySelector('[data-zybhide]');if(hb)hb.textContent='隐藏';}"
             + "return true;};"
+            /* 浮窗是否显示只看「这页有没有正文」。旧实现每 450ms 读一次整页 textContent（50~200KB），
+               这里改成缓存：仅 URL 变化、或有新 DOM 变更且上次未通过时才重算，长度存 window.__zybBodyLen。 */
+            + "var GARE=/(答案|解析|解答|题目)/;"
+            + "var gateUrl='',gateOk=false,gateMut=-1,gateTries=0;"
+            + "function gateMeasure(){try{var b=document.body;var t=b?(b.textContent||''):'';"
+            + "window.__zybBodyLen=t.length;return t.length>200&&GARE.test(t);}catch(e){return false;}}"
             + "function gate(){var bar=document.getElementById('zyb-bar');if(!bar)return;"
             /* __zybBarOp===0 是长按消失，gate 不能把它拉回来。 */
             + "if(window.__zybCapture||window.__zybBarOp===0){bar.style.display='none';return;}"
-            + "var t=(document.body&&document.body.textContent)||'';"
-            + "var ok=t.length>200&&/(答案|解析|解答|题目)/.test(t);"
-            + "bar.style.display=ok?'flex':'none';}"
-            + "function loop(){if(window.__zybCapture)return;scanKill();repairNav();mkBar();gate();}"
+            + "var m=window.__zybMut||0;"
+            /* 整页 textContent 读取是有成本的（50~200KB）：每次导航最多量 3 次，
+               量过就永久缓存，不再随 DOM 变更反复读整页。 */
+            + "if(gateUrl!==location.href){gateUrl=location.href;gateOk=false;gateMut=-1;gateTries=0;}"
+            + "if(!gateOk&&gateMut!==m&&gateTries<3){gateMut=m;gateTries++;gateOk=gateMeasure();}"
+            + "bar.style.display=gateOk?'flex':'none';}"
+            /* 脏判定：没有 DOM 变更就不再反复全扫；首轮与 3s 心跳强制跑（页面自渲染不靠 DOM 变更也能修）。 */
+            + "var lastMut=-1;"
+            + "function loop(force){if(window.__zybCapture)return;"
+            + "var m=window.__zybMut||0;"
+            + "if(force||m!==lastMut){lastMut=m;scanKill();scanFloat();repairNav();}"
+            + "mkBar();gate();}"
 
             /* ---------- 4. 常驻（必须防抖：DOM 一变就全量扫会拖死加载） ---------- */
-            + "loop();"
+            + "loop(true);"
             + "var pend=0;"
             + "try{new MutationObserver(function(){"
-            + "if(pend)return;pend=1;setTimeout(function(){pend=0;loop();},450);})"
+            + "window.__zybMut=(window.__zybMut||0)+1;"
+            + "if(pend)return;pend=1;setTimeout(function(){pend=0;loop(false);},450);})"
             + ".observe(document.documentElement,{childList:true,subtree:true});}catch(e){}"
-            + "setInterval(function(){if(document.hidden)return;loop();},3000);"
+            + "setInterval(function(){if(document.hidden)return;loop(true);},3000);"
             + "})()";
     }
 
@@ -339,11 +379,28 @@ public class WebKiller {
     private static void inject(final Object webView) {
         ensureBridge(webView);
         remember(webView); // 只做登记；每次导航都要重新注入（新文档会丢掉 __zybclean 标记）
-        for (long delay : DELAYS) {
+        // 代次令牌：本次导航排下的定时器只认自己的代次；被后续导航取代后直接 no-op，
+        // 不会再往新文档里灌旧脚本、也不会把上一页的 __zybNavInfo 刷回来。
+        final int[] gen;
+        final int myGen;
+        synchronized (GEN) {
+            int[] g = GEN.get(webView);
+            if (g == null) {
+                g = new int[]{0};
+                GEN.put(webView, g);
+            }
+            g[0]++;
+            gen = g;
+            myGen = g[0];
+        }
+        for (long delay : INJECT_DELAYS) {
             try {
                 XposedHelpers.callMethod(webView, "postDelayed", new Runnable() {
                     @Override
                     public void run() {
+                        synchronized (GEN) {
+                            if (gen[0] != myGen) return;
+                        }
                         try {
                             XposedHelpers.callMethod(webView, "evaluateJavascript", JS, null);
                         } catch (Throwable ignored) {
@@ -356,26 +413,29 @@ public class WebKiller {
             }
         }
         // 底部蓝色「再拍一页」是原生按钮，长按它唤回浮窗。
-        // 只扫一次：绑上就不再扫（BIND_ROOTS 记根 View），绑不上最多再试一次。
-        scheduleBind(webView, 0);
-        // 诊断：把网页里顶部选项卡的真实内容打出来，便于确认「结果N」到底存不存在。
-        try {
-            XposedHelpers.callMethod(webView, "postDelayed", new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        XposedHelpers.callMethod(webView, "evaluateJavascript",
-                                "window.__zybNavInfo||'(none)'", new android.webkit.ValueCallback<String>() {
-                                    @Override
-                                    public void onReceiveValue(String value) {
-                                        HookEntry.log("WebKiller nav: " + value);
-                                    }
-                                });
-                    } catch (Throwable ignored) {
+        // 同一 WebView 只在首次导航时挂一次；绑不上靠 1 次重试 + Activity onResume 兜底。
+        if (myGen == 1) scheduleBind(webView, 0);
+        if (BuildFlags.PROBES) {
+            // 诊断：把网页里顶部选项卡的真实内容打出来，便于确认「结果N」到底存不存在。
+            // 只在 debug 包（BuildFlags.PROBES=true）编进来，正式包 javac 整段消除。
+            try {
+                XposedHelpers.callMethod(webView, "postDelayed", new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            XposedHelpers.callMethod(webView, "evaluateJavascript",
+                                    "window.__zybNavInfo||'(none)'", new android.webkit.ValueCallback<String>() {
+                                        @Override
+                                        public void onReceiveValue(String value) {
+                                            HookEntry.log("WebKiller nav: " + value);
+                                        }
+                                    });
+                        } catch (Throwable ignored) {
+                        }
                     }
-                }
-            }, Long.valueOf(5000L));
-        } catch (Throwable ignored) {
+                }, Long.valueOf(5000L));
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -527,8 +587,8 @@ public class WebKiller {
 
     private static boolean bindOne(final android.view.View target) {
         synchronized (BOUND_NATIVE) {
-            if (BOUND_NATIVE.containsKey(target)) return false;
-            BOUND_NATIVE.put(target, Boolean.TRUE);
+            // 已绑过：算成功（让调用方落 BIND_ROOTS，不再每次 onResume 重扫）。
+            if (BOUND_NATIVE.containsKey(target)) return true;
         }
         android.view.View.OnLongClickListener l = new android.view.View.OnLongClickListener() {
             @Override
@@ -540,6 +600,10 @@ public class WebKiller {
         try {
             target.setOnLongClickListener(l);
             target.setLongClickable(true);
+            // 成功之后才记标记：失败不写，下次还能重试（否则一次抖动 = 长按永久失效）。
+            synchronized (BOUND_NATIVE) {
+                BOUND_NATIVE.put(target, Boolean.TRUE);
+            }
             HookEntry.log("WebKiller native long-press bound: "
                     + target.getClass().getName() + " " + target.getWidth() + "x" + target.getHeight());
             return true;
@@ -553,29 +617,35 @@ public class WebKiller {
     private static void revealBars() {
         Object[] list;
         synchronized (WEBVIEWS) {
-            list = WEBVIEWS.toArray();
+            list = WEBVIEWS.toArray(); // 快照，避免遍历时被并发 add/remove
         }
+        int n = 0;
         for (Object o : list) {
+            if (o == null) continue;
+            n++;
             try {
                 XposedHelpers.callMethod(o, "evaluateJavascript",
                         "window.__zybBarShow&&window.__zybBarShow()", null);
             } catch (Throwable ignored) {
             }
         }
-        HookEntry.log("WebKiller native long-press: reveal " + list.length + " webview(s)");
+        HookEntry.log("WebKiller native long-press: reveal " + n + " webview(s)");
     }
 
     /** 给 WebView 挂上 java 桥对象（重复调用安全）。 */
     private static void ensureBridge(Object webView) {
         synchronized (BRIDGED) {
             if (BRIDGED.containsKey(webView)) return;
-            BRIDGED.put(webView, Boolean.TRUE);
         }
         try {
             Object ctx = XposedHelpers.callMethod(webView, "getContext");
             if (!(ctx instanceof android.content.Context)) return;
             Object bridge = new H5Bridge((android.content.Context) ctx, (android.webkit.WebView) webView);
             XposedHelpers.callMethod(webView, "addJavascriptInterface", bridge, "zybcleanHost");
+            // 挂上之后才记标记：失败不写，下次导航会重试（旧实现一次失败 = 整页复制/存图永久失效）。
+            synchronized (BRIDGED) {
+                BRIDGED.put(webView, Boolean.TRUE);
+            }
             HookEntry.log("WebKiller bridge attached");
         } catch (Throwable t) {
             HookEntry.log("WebKiller bridge failed: " + t);
@@ -584,11 +654,19 @@ public class WebKiller {
 
     private static boolean remember(Object webView) {
         synchronized (WEBVIEWS) {
-            for (Object o : WEBVIEWS) {
-                if (o == webView) return false;
-            }
+            if (WEBVIEWS.contains(webView)) return false;
             WEBVIEWS.add(webView);
-            while (WEBVIEWS.size() > MAX_WEBVIEWS) WEBVIEWS.remove(0);
+            // 弱集合没有顺序，超限时随便移除一个「不是刚加入的」引用即可（被回收的也会自动消失）。
+            int over = WEBVIEWS.size() - MAX_WEBVIEWS;
+            if (over > 0) {
+                Iterator<Object> it = WEBVIEWS.iterator();
+                while (over > 0 && it.hasNext()) {
+                    if (it.next() != webView) {
+                        it.remove();
+                        over--;
+                    }
+                }
+            }
             return true;
         }
     }

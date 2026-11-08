@@ -1,0 +1,37 @@
+# B 部分修复：原生 Activity 侧清理（历史记录横幅 + 问小帮/AI 浮窗）
+
+## 我拥有的文件（唯一可改）
+- `src/io/github/sql0106/zybclean/AnswerPageKiller.java`（已改，未 git add/commit）
+
+## 依据
+- review-1.3.0.md:64-92（P0 `worth()` 恒真）、:418-451（P1 `walkBanner` 每节点 `getLocationOnScreen`/`int[2]`）、:32-63（P0 禁文字匹配）
+
+## TODO
+- [x] 1. `worth()`：删 `ACTIVITY_HINTS`（含 "Homework" 等宽泛片段）→ 精确包前缀白名单 `PAGE_PREFIX`；结果按类名缓存 `HashMap<String,Boolean> WORTH`（含 256 条上限）
+- [x] 2. 删除全部文字匹配：`KILL_TEXTS` / `isKillText` / `collectText` / `textOf` / `buttonOf` / `isVisible` / `clean()` 及 `schedule()` 里对 `clean` 的调用全部移除
+- [x] 3. `schedule()` 改为按**结构**隐藏原生「问小帮」入口：按全限定类名 `AISearchBottomInputView` 找底栏（深度 ≤ 24），再找「等高 + 每个子项都含 ImageView 与 *TextView」的可见兄弟按钮组，取组内最后一个可见子项（真机 dump 即第 4 个=问小帮）；不读任何文字
+- [x] 4. `walkBanner`：深度上限 4（`BANNER_DEPTH`）；不再每节点取位置——父子累计偏移（`getTop`/`getScrollY`）算 top，只有「宽 ≥ 95% 屏宽」的候选才 `getLocationOnScreen` 校准；`int[2]` 用静态字段 `LOC` 复用，零分配
+- [x] 5. 降低遍历次数：`BANNER_DONE`（WeakHashMap<根 View,Boolean>）——排延时前查一次、每轮 `killBottomBanner` 再查一次，命中即 4 档全部短路；同理 `AI_DONE` 让问小帮命中后的第二趟直接返回；`DELAYS` 3 档压成 2 档 `{800,3000}`
+- [x] 6. `installRecordBanner` hook 方式不变：`hookAllMethods(android.app.Activity, "onResume")` + `RECORD_ACTIVITY.equals(getClass().getName())` 精确放行（未改回 findClass(RECORD_ACTIVITY)）
+- [x] 7. 清理：未使用 import（`ArrayList`/`List` 已删）、未使用私有方法（`buttonOf`/`isVisible`/`collectText`/`textOf`/`isKillText`/`clean`/`intOf`/`locOf` 全删）已清零
+- [x] 8. 自检：`grep` 确认 `KILL_TEXTS`、`ACTIVITY_HINTS`、`collectText`、`isKillText`、`textOf`、`buttonOf`、`isVisible`、`clean(`、`locOf`、`intOf`、`toLowerCase`、`getText` 在文件内 0 命中；每个私有方法都有调用点；无新增文字匹配（保留的字符串比较只有 Activity 类名/包前缀）
+
+## 改了什么
+1. **头注释与常量**：`ACTIVITY_HINTS` + `KILL_TEXTS` 删除，新增 `PAGE_PREFIX`（`activity.search` / `activity.exam_explain` / `activity.user.UserAskRecord`）、`WORTH` 缓存、`AI_BAR_CLASS`、`AI_SCAN_DEPTH=24`、`BANNER_DEPTH=4`、`AI_DONE`/`BANNER_DONE`(WeakHashMap)、`LOC`(int[2] 复用)、`probeLogs`/`aiLogs` 日志预算。
+2. **hook 装配**：`install()` 只 hook `Activity.onResume`（原来 onCreate+onResume 双挂会重复排延时），`worth()` 命中才 `schedule()`；`schedule()` 直接强转 `android.app.Activity`（不再反射 `getWindow`/`getDecorView`/`postDelayed`），2 档延时。
+3. **原生 AI 入口**：新增 `scanAiEntry` → `findAiBar`（按全限定类名 DFS）→ `lastIconLabelButton`（等高、含 ImageView 与 *TextView 的可见兄弟组，取最后一个可见项；宽 < 底栏一半才动手）→ `hide`。全程不读文字、不看 id。
+4. **横幅几何**：`killBottomBanner` 改收 `View`，先查 `BANNER_DONE`；`walkBanner` 深度 4、累计偏移、只有全宽节点才 `screenY`（复用 `LOC`）、命中/无命中日志都受 `probeLogs<3` 限制；`hideSiblingAbove`/`hide`/`safeName` 改直接 View API（不再反射）。
+
+## 未做什么
+- 没有改回/新增任何按文字匹配的逻辑（用户死线）。
+- 没有像 review 建议的那样隐藏「底栏最后一个可见子项」——真机 dump 显示底栏最右侧是「再拍一页」大按钮（WebKiller 长按唤回浮窗要用它），所以改为「等高、图标+文字的兄弟按钮组」内取最后一个，避免误藏拍照按钮。
+- 没有采用 review 的「纯累计偏移、完全不调 getLocationOnScreen」：按你的要求保留「仅全宽候选才取位置」的校准路径（复用同一个 int[2]）。
+- 未在真机验证（禁止连设备）；`lastIconLabelButton` 的阈值（宽 < barW/2、等高）来自 analysis/snap4.txt 的一次 dump，App 升级后可能需微调。
+- 白名单没有加 `com.baidu.homework.activity.question`：analysis/classes.txt 的包清单里不存在该包（搜题页在 `activity.search`），加了是死前缀。
+
+## 风险
+- `BANNER_DEPTH=4` 是硬上限：若某版本横幅被多包一层（>4 层）就静默不清理，日志只剩 `probe no hit`。
+- `AI_DONE`/`BANNER_DONE` 以 decor View 为键：同一 Activity 内换页后重新 inflate 新视图不受影响；但同一 decor 上二次出现的横幅/入口不会再次处理（这是为省遍历有意为之）。
+- 隐藏「问小帮」依赖结构判定；若某版本按钮组里出现高度不一致的项（如某按钮换行），该组不再命中 → 不隐藏（宁漏不误伤）。
+- `LOC`、`baseY`、日志计数都是静态字段，按「都跑在主线程」假设；若哪天在非主线程调用 `killBottomBanner` 需改为线程局部。
+- `WORTH` 加了 synchronized（HashMap 非线程安全，防线上低概率并发 onCreate/onResume）。

@@ -1,11 +1,16 @@
 package io.github.sql0106.zybclean;
 
-import io.github.sql0106.zybclean.compat.XC_MethodHook;
-import io.github.sql0106.zybclean.compat.XposedBridge;
-import io.github.sql0106.zybclean.compat.XposedHelpers;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.WeakHashMap;
+
+import io.github.sql0106.zybclean.compat.XC_MethodHook;
+import io.github.sql0106.zybclean.compat.XposedBridge;
+import io.github.sql0106.zybclean.compat.XposedHelpers;
 
 /**
  * 首页顶栏净化：去掉搜索框（跑马灯热词）、铃铛（通知入口）、红色角标。
@@ -20,23 +25,26 @@ import java.util.List;
  *          ├─ BadgeTextView   红点 ×2
  *
  * 注意：作业帮所有资源 id 都被混淆成同一个名字 `zyb`，只能按控件类名 + 兄弟顺序定位。
+ * 只按「类名 / 几何位置」判断，不做任何文字匹配（文案会变，且会误伤同名按钮）。
  */
 public class HomeChromeKiller {
 
     private static final String INDEX = "com.baidu.homework.activity.index.IndexActivity";
     private static final String BADGE = "com.zuoyebang.design.badge.BadgeTextView";
-    private static final long[] DELAYS = {600L, 1500L, 3000L, 6000L, 12000L};
-    private static final int GONE = 8;
+
+    /** 首屏数据可能晚到，所以只留「首次 + 1 次兜底」两趟（后续生命周期回调直接跳过）。 */
+    private static final long[] DELAYS = {600L, 2500L};
+    private static final int MAX_PASSES = 2;
+    private static final int MAX_DEPTH = 60;
+    private static final int GONE = View.GONE;
 
     /**
-     * 首页「垃圾卡片」——按可见文字定位（id 全混淆成 zyb，只能靠文字）。
-     * 命中后向上找卡片容器（ConstraintLayout 且够高）整块 GONE。
+     * 每个 decorView 已清过的次数（弱键：Activity 销毁后 key 可被回收）。
+     * 首页 decor 底下挂着整个信息流 RecyclerView，重复全树代价太高。
      */
-    private static final String[] JUNK_TEXTS = {
-            "绑定作业帮APP账号",   // 账号推广卡：立即绑定 / 随时了解孩子学习进度
-    };
+    private static final WeakHashMap<View, int[]> PASSES = new WeakHashMap<View, int[]>();
 
-    public static void install(final ClassLoader cl) {
+    public static void install(ClassLoader cl) {
         try {
             Class<?> index = XposedHelpers.findClass(INDEX, cl);
             XC_MethodHook hook = new XC_MethodHook() {
@@ -75,13 +83,14 @@ public class HomeChromeKiller {
             Object win = XposedHelpers.callMethod(activity, "getWindow");
             if (win == null) return;
             final Object decor = XposedHelpers.callMethod(win, "getDecorView");
-            if (decor == null) return;
+            if (!(decor instanceof View)) return;
+            if (!hasPassLeft((View) decor)) return;         // 已经清够两趟，不必再排定时器
             for (long delay : DELAYS) {
                 XposedHelpers.callMethod(decor, "postDelayed", new Runnable() {
                     @Override
                     public void run() {
                         try {
-                            clean(decor);
+                            clean((View) decor);
                         } catch (Throwable t) {
                             HookEntry.log("HomeChromeKiller: clean failed: " + t);
                         }
@@ -93,28 +102,51 @@ public class HomeChromeKiller {
         }
     }
 
-    private static void clean(Object root) {
-        hideJunkCards(root);
+    private static boolean hasPassLeft(View root) {
+        synchronized (PASSES) {
+            int[] n = PASSES.get(root);
+            return n == null || n[0] < MAX_PASSES;
+        }
+    }
 
-        List<Object> marquees = new ArrayList<Object>();
-        List<Object> stateIcons = new ArrayList<Object>();
-        collect(root, marquees, stateIcons, 0);
-        if (marquees.isEmpty() && stateIcons.isEmpty()) return;
+    /** 占用一次清理额度；返回 false 表示这个 decor 已经不缺清理了。 */
+    private static boolean markPass(View root) {
+        synchronized (PASSES) {
+            int[] n = PASSES.get(root);
+            if (n == null) {
+                n = new int[]{0};
+                PASSES.put(root, n);
+            }
+            if (n[0] >= MAX_PASSES) return false;
+            n[0]++;
+            return true;
+        }
+    }
+
+    /** 单趟遍历收集，循环结束后统一设置（原先是三趟全树 + 边遍历边写）。 */
+    private static void clean(View root) {
+        if (root == null || !markPass(root)) return;
+
+        List<View> marquees = new ArrayList<View>();
+        List<View> icons = new ArrayList<View>();
+        List<View> badges = new ArrayList<View>();
+        walk(root, marquees, icons, badges, 0);
+        if (marquees.isEmpty() && icons.isEmpty() && badges.isEmpty()) return;
 
         // 1) 搜索框：跑马灯热词的父容器（只到父级，避免连带右侧铃铛/扫码一起没）
-        for (Object m : marquees) {
-            Object parent = XposedHelpers.callMethod(m, "getParent");
-            if (parent != null) {
-                hide(parent);
-                HookEntry.log("HomeChromeKiller: hide search box");
-            }
+        for (View m : marquees) {
+            ViewParent parent = m.getParent();
+            if (parent instanceof View) hide((View) parent);
+        }
+        if (!marquees.isEmpty()) {
+            HookEntry.log("HomeChromeKiller: hide " + marquees.size() + " search box(es)");
         }
 
         // 2) 铃铛：同一父容器里最左边的 StateImageView（右边那个是扫码，保留）
-        if (stateIcons.size() >= 2) {
-            Object leftMost = null;
+        if (icons.size() >= 2) {
+            View leftMost = null;
             int minX = Integer.MAX_VALUE;
-            for (Object v : stateIcons) {
+            for (View v : icons) {
                 int x = leftOf(v);
                 if (x >= 0 && x < minX) {
                     minX = x;
@@ -128,141 +160,43 @@ public class HomeChromeKiller {
         }
 
         // 3) 红点：树上的 BadgeTextView 直接 GONE（setVisibility 钩子兜底新创建的）
-        List<Object> badges = new ArrayList<Object>();
-        collectByName(root, "BadgeTextView", badges, 0);
-        for (Object b : badges) {
-            hide(b);
-        }
+        for (View b : badges) hide(b);
         if (!badges.isEmpty()) {
             HookEntry.log("HomeChromeKiller: hide " + badges.size() + " badge(s)");
         }
     }
 
-    private static void collect(Object v, List<Object> marquees, List<Object> stateIcons, int depth) {
-        if (v == null || depth > 60) return;
+    private static void walk(View v, List<View> marquees, List<View> icons, List<View> badges,
+                             int depth) {
+        if (v == null || depth > MAX_DEPTH) return;
         String simple = v.getClass().getSimpleName();
         if ("XMarqueeView".equals(simple)) {
             marquees.add(v);
         } else if ("StateImageView".equals(simple)) {
-            stateIcons.add(v);
+            icons.add(v);
+        } else if ("BadgeTextView".equals(simple)) {
+            badges.add(v);
         }
-        int n = intOf(v, "getChildCount");
-        for (int i = 0; i < n; i++) {
-            Object child = null;
-            try {
-                child = XposedHelpers.callMethod(v, "getChildAt", Integer.valueOf(i));
-            } catch (Throwable ignored) {
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) {
+                walk(g.getChildAt(i), marquees, icons, badges, depth + 1);
             }
-            collect(child, marquees, stateIcons, depth + 1);
         }
     }
 
-    /** 首页「垃圾卡片」：文字命中 JUNK_TEXTS 就整卡隐藏。 */
-    private static void hideJunkCards(Object root) {
-        List<Object> texts = new ArrayList<Object>();
-        collectText(root, texts, 0);
-        int hidden = 0;
-        for (Object tv : texts) {
-            String s = textOf(tv);
-            if (s == null || !isJunk(s)) continue;
-            Object card = findCard(tv);
-            if (card != null) {
-                hide(card);
-                hidden++;
-            }
-        }
-        if (hidden > 0) {
-            HookEntry.log("HomeChromeKiller: hide " + hidden + " junk card(s)");
-        }
-    }
-
-    private static boolean isJunk(String text) {
-        for (String key : JUNK_TEXTS) {
-            if (text.contains(key)) return true;
-        }
-        return false;
-    }
-
-    /** 从文字节点往上找卡片容器：ConstraintLayout 且高度 ≥ 300px。 */
-    private static Object findCard(Object textView) {
-        Object cur = textView;
-        for (int i = 0; i < 6; i++) {
-            Object parent;
-            try {
-                parent = XposedHelpers.callMethod(cur, "getParent");
-            } catch (Throwable t) {
-                return null;
-            }
-            if (parent == null) break;
-            cur = parent;
-            if (cur.getClass().getSimpleName().contains("ConstraintLayout") && intOf(cur, "getHeight") >= 300) {
-                return cur;
-            }
-        }
+    private static void hide(View view) {
+        if (view == null) return;
         try {
-            return XposedHelpers.callMethod(textView, "getParent");
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    private static void collectText(Object v, List<Object> out, int depth) {
-        if (v == null || depth > 60) return;
-        if (v.getClass().getSimpleName().endsWith("TextView")) out.add(v);
-        int n = intOf(v, "getChildCount");
-        for (int i = 0; i < n; i++) {
-            Object child = null;
-            try {
-                child = XposedHelpers.callMethod(v, "getChildAt", Integer.valueOf(i));
-            } catch (Throwable ignored) {
-            }
-            collectText(child, out, depth + 1);
-        }
-    }
-
-    private static String textOf(Object view) {
-        try {
-            Object t = XposedHelpers.callMethod(view, "getText");
-            if (t != null) return t.toString().trim();
-        } catch (Throwable ignored) {
-        }
-        return null;
-    }
-
-    private static void collectByName(Object v, String simpleName, List<Object> out, int depth) {
-        if (v == null || depth > 60) return;
-        if (simpleName.equals(v.getClass().getSimpleName())) out.add(v);
-        int n = intOf(v, "getChildCount");
-        for (int i = 0; i < n; i++) {
-            Object child = null;
-            try {
-                child = XposedHelpers.callMethod(v, "getChildAt", Integer.valueOf(i));
-            } catch (Throwable ignored) {
-            }
-            collectByName(child, simpleName, out, depth + 1);
-        }
-    }
-
-    private static void hide(Object view) {
-        try {
-            XposedHelpers.callMethod(view, "setVisibility", Integer.valueOf(GONE));
+            view.setVisibility(GONE);
         } catch (Throwable ignored) {
         }
     }
 
-    private static int intOf(Object target, String method) {
-        try {
-            Object r = XposedHelpers.callMethod(target, method);
-            if (r instanceof Integer) return ((Integer) r).intValue();
-        } catch (Throwable ignored) {
-        }
-        return 0;
-    }
-
-    private static int leftOf(Object view) {
+    private static int leftOf(View view) {
         try {
             int[] loc = new int[2];
-            XposedHelpers.callMethod(view, "getLocationOnScreen", loc);
+            view.getLocationOnScreen(loc);
             return loc[0];
         } catch (Throwable t) {
             return -1;

@@ -41,7 +41,18 @@ public final class PageShot {
     private static final int MODE_EXPAND = 4;
     private static final int MAX_EXPAND_H = 14000;
 
+    /** 整页撑开前的布局轮询上界（超过就落回固定延时继续，不无限等）。 */
+    private static final long EXPAND_WAIT_MS = 2500L;
+    /** 切软件层后等一帧栅格化的短延时（原 900ms 死等 → 布局到位后只需一帧）。 */
+    private static final long LAYER_SETTLE_MS = 200L;
+    /** CLEAN 之后到落笔的短延时（原 420ms）。 */
+    private static final long CLEAN_SETTLE_MS = 200L;
+    /** 一次截图的硬上界：超过就强制复位 {@code sBusy}，避免一次异常让长图永久失效。 */
+    private static final long BUSY_TIMEOUT_MS = 60000L;
+
     private static volatile boolean sBusy = false;
+    /** {@code sBusy} 被置真的时刻（uptimeMillis），用于陈旧锁自愈。 */
+    private static volatile long sBusyAt = 0L;
 
     private PageShot() {
     }
@@ -55,15 +66,31 @@ public final class PageShot {
      */
     public static void capture(final Context context, final WebView wv, String part) {
         if (sBusy) {
-            toast(context, "正在生成，请稍候");
-            return;
+            // 陈旧锁自愈：正常路径最慢几秒就复位，超过 BUSY_TIMEOUT_MS 还挂着说明回调丢了
+            long held = android.os.SystemClock.uptimeMillis() - sBusyAt;
+            if (held < BUSY_TIMEOUT_MS) {
+                toast(context, "正在生成，请稍候");
+                return;
+            }
+            HookEntry.log("PageShot busy guard: release stale lock after " + held + "ms");
+            sBusy = false;
         }
         if (wv == null || wv.getWidth() <= 0 || wv.getHeight() <= 0) {
             toast(context, "页面还没准备好");
             return;
         }
         sBusy = true;
-        new Job(context.getApplicationContext(), wv, part == null ? "full" : part).start();
+        sBusyAt = android.os.SystemClock.uptimeMillis();
+        final Job job = new Job(context.getApplicationContext(), wv, part == null ? "full" : part);
+        // 硬看门狗：WebView 已销毁 / 定时器被移除 / PixelCopy 不回调 时 done() 可能永远轮不到，
+        // 没有它 sBusy 会永久为 true，长图从此只能重启 App 才能用。
+        job.main.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                job.watchdog();
+            }
+        }, BUSY_TIMEOUT_MS);
+        job.start();
     }
 
     private static void toast(Context ctx, String msg) {
@@ -89,7 +116,10 @@ public final class PageShot {
         private int rectY;
         private int rectW;
         private int rectH;
-        /** 「答案/解析」标题的文档纵坐标（CSS px），JS 探测；<=0 表示没找到。 */
+        /**
+         * 题目/解答分界（CSS px）。JS 侧已取消「答案/解析…」文字探测（用户死线）→ 恒为 0，
+         * 也就是默认存整页；字段保留只是为了 {@link #cropPart} 的既有契约不变。
+         */
         private int splitY;
         private boolean innerScroller;
 
@@ -112,6 +142,11 @@ public final class PageShot {
         private int accOffset;
         private View scroller;
         private int scrollerStartY;
+
+        /** 撑开前 WebView 的 LayoutParams.height；{@code Integer.MIN_VALUE} = 当前没有撑开。 */
+        private int oldLpHeight = Integer.MIN_VALUE;
+        /** done() 只能生效一次（正常出口 / 看门狗 / 后台线程回调可能同时到）。 */
+        private volatile boolean finished = false;
 
         Job(Context ctx, WebView wv, String part) {
             this.ctx = ctx;
@@ -211,8 +246,14 @@ public final class PageShot {
                     outW = Math.max(1, Math.round(vis.width() * scale));
                     outH = MAX_OUT_HEIGHT;
                 }
-                out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
-                out.eraseColor(0xFFFFFFFF);
+                if (jsScroll) {
+                    // 撑开整页路径不拼接，先用不着总画布：不分配（最多省 48MB）。
+                    // 只有撑开失败回退拼接时，才由 ensureOut() 按这套 outW/outH 重建。
+                    out = null;
+                } else {
+                    out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
+                    out.eraseColor(0xFFFFFFFF);
+                }
 
                 if (mode == MODE_NATIVE) {
                     scroller = findScroller(wv);
@@ -254,13 +295,19 @@ public final class PageShot {
                 finish();
                 return;
             }
+            if (out == null) {
+                // 撑开路径提前释放了拼接画布；能走到这里说明 fallback 重建失败
+                done(false, "内存不足，无法拼接长图");
+                return;
+            }
             if (mode == MODE_JS) {
                 jsScrollStep();
             } else if (mode == MODE_NATIVE) {
                 nativeScrollStep();
             } else {
+                // 单屏：落笔与收尾都由 paste() 负责（PixelCopy 是异步的，
+                // 这里再 finish() 会先存下一张还没贴图的空画布）
                 grab(0, 0);
-                finish();
             }
         }
 
@@ -329,13 +376,6 @@ public final class PageShot {
          * @param nativeY 原生模式下累计滚动位移（设备 px）
          */
         private void grab(final int cssY, final int nativeY) {
-            final Bitmap frame;
-            try {
-                frame = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
-            } catch (Throwable t) {
-                done(false, "创建帧失败：" + t);
-                return;
-            }
             // WebView 是硬件加速渲染的，View.draw(Canvas) 拍不到内容（实测全白）。
             // PixelCopy 没有 View 重载（只有 Surface/SurfaceView/Window），所以拍整个窗口再裁。
             if (win != null && android.os.Build.VERSION.SDK_INT >= 26) {
@@ -343,7 +383,13 @@ public final class PageShot {
                 final int w = decor.getWidth();
                 final int h = decor.getHeight();
                 if (w > 0 && h > 0) {
-                    final Bitmap shot = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    final Bitmap shot;
+                    try {
+                        shot = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    } catch (Throwable t) {
+                        done(false, "创建帧失败：" + t);
+                        return;
+                    }
                     try {
                         android.view.PixelCopy.request(win, new Rect(0, 0, w, h),
                                 shot, new android.view.PixelCopy.OnPixelCopyFinishedListener() {
@@ -351,29 +397,37 @@ public final class PageShot {
                                     public void onPixelCopyFinished(int result) {
                                         if (result != android.view.PixelCopy.SUCCESS) {
                                             HookEntry.log("PageShot PixelCopy result=" + result);
-                                            shot.recycle();
-                                            frame.recycle();
+                                            safeRecycle(shot);
                                             done(false, "抓屏失败（" + result + "）");
                                             return;
                                         }
-                                        paste(shot, frame, cssY, nativeY, true);
+                                        paste(shot, null, cssY, nativeY, true);
                                     }
                                 }, main);
                         return;
                     } catch (Throwable t) {
                         HookEntry.log("PageShot PixelCopy 异常，回退 draw(): " + t);
-                        shot.recycle();
+                        safeRecycle(shot);
                     }
                 }
+            }
+            // 兜底：软件层 View.draw。帧按需分配——PixelCopy 成功时一帧都不建，每步省 8~60MB。
+            final Bitmap frame;
+            try {
+                frame = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
+            } catch (Throwable t) {
+                done(false, "创建帧失败：" + t);
+                return;
             }
             frame.eraseColor(0xFFFFFFFF);
             try {
                 wv.draw(new Canvas(frame));
             } catch (Throwable t) {
+                safeRecycle(frame);
                 done(false, "绘制失败：" + t);
                 return;
             }
-            paste(frame, cssY, nativeY);
+            paste(frame, frame, cssY, nativeY, false);
         }
 
         /** JS 模式下内容是否已经全部覆盖（比按屏数算更可靠）。 */
@@ -382,18 +436,18 @@ public final class PageShot {
         }
 
         /** 把一帧按可见区裁剪并贴进总图。 */
-        private void paste(Bitmap frame, int cssY, int nativeY) {
-            paste(frame, null, cssY, nativeY, false);
-        }
-
         private void paste(Bitmap shot, Bitmap viewFrame, int cssY, int nativeY, boolean fromWindow) {
             try {
+                Bitmap frame = fromWindow ? shot : viewFrame;
+                if (frame == null) {
+                    done(false, "抓屏失败：帧为空");
+                    return;
+                }
                 // 每一帧都是「WebView 当前可见区域」的画面（JS 模式下页面内容已滚到 cssY），
                 // 所以裁剪区固定用 vis；切勿用 getBoundingClientRect() 的 rectH——
                 // 它是整页布局高度（若 rectY 为负，裁剪会一路向上跑，贴出来就是白的）。
                 Rect src = new Rect(vis);
-                if (fromWindow && shot != null) src.offset(wvLoc[0], wvLoc[1]);
-                Bitmap frame = fromWindow ? shot : viewFrame;
+                if (fromWindow) src.offset(wvLoc[0], wvLoc[1]);
                 if (!src.intersect(0, 0, frame.getWidth(), frame.getHeight())) {
                     done(false, "可见区域异常");
                     return;
@@ -461,7 +515,13 @@ public final class PageShot {
             saveBitmap(out);
         }
 
-        /** 用 JS 探到的「答案」标题位置把整页图切成题目段 / 解答段。 */
+        /**
+         * 用 {@link #splitY} 把整页图切成题目段 / 解答段。
+         *
+         * <p>对外契约不变：{@code splitY<=0} 存整页、{@code q} 取上半、{@code a} 从
+         * {@code splitY-12px} 起取下半。注意 JS 侧已不再按文字探测分界（用户死线），
+         * 所以默认 {@code splitY=0} → 存整页；分段位置只能由 Java 侧传入。</p>
+         */
         private Bitmap cropPart(Bitmap whole) {
             int h = whole.getHeight();
             int splitPx = Math.round(splitY * density);
@@ -481,71 +541,135 @@ public final class PageShot {
             return Bitmap.createBitmap(whole, 0, y0, whole.getWidth(), y1 - y0);
         }
 
-        /** 统一落盘：PNG → 相册。expand 路径与拼接路径共用。 */
+        /**
+         * 统一落盘：PNG → 相册。expand 路径与拼接路径共用。
+         *
+         * <p>大图 {@code compress(PNG,100)} 要 0.5~3s、写相册再 0.3~1.5s，全在主线程会直接 ANR，
+         * 所以编码与落盘都放到后台线程；{@link H5Bridge#saveBytes} 只用 ContentResolver/File IO
+         * （内部自建的主线程 Handler 是从 {@code Looper.getMainLooper()} 取的），不依赖调用线程，
+         * 可以安全地在后台线程调用。主线程只负责 toast 与状态。</p>
+         */
         private void saveBitmap(Bitmap bmp) {
-            try {
-                if (bmp == null) {
-                    done(false, "没有可保存的图像");
-                    return;
+            if (bmp == null) {
+                done(false, "没有可保存的图像");
+                return;
+            }
+            // 先裁再编码：裁完立刻回收原图，避免「原图 + 副本」双份像素同时驻留。
+            if (part != null && part.length() > 0 && !"full".equals(part)) {
+                Bitmap cp = null;
+                try {
+                    cp = cropPart(bmp);
+                } catch (Throwable t) {
+                    HookEntry.log("PageShot crop failed: " + t);
                 }
-                if (part != null && part.length() > 0 && !"full".equals(part)) {
-                    Bitmap cp = cropPart(bmp);
-                    if (cp != bmp) {
-                        if (bmp == out) out = null;
-                        bmp.recycle();
-                        bmp = cp;
+                if (cp != null && cp != bmp) {
+                    if (bmp == out) out = null;
+                    safeRecycle(bmp);
+                    bmp = cp;
+                }
+            }
+            final Bitmap src = bmp;
+            final int srcW = src.getWidth();
+            final int srcH = src.getHeight();
+            final String logMode = modeOf();
+            if (src == out) out = null;   // 所有权交给后台线程，done() 不再碰它
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    byte[] data = null;
+                    String path = "";
+                    try {
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream(256 * 1024);
+                        if (src.compress(Bitmap.CompressFormat.PNG, 100, bos)) {
+                            data = bos.toByteArray();
+                        }
+                        bos = null;
+                    } catch (Throwable t) {
+                        HookEntry.log("PageShot compress failed: " + t);
+                    } finally {
+                        safeRecycle(src);
                     }
+                    if (data != null) {
+                        try {
+                            String name = "zybclean_" + android.text.format.DateFormat.format(
+                                    "yyyyMMdd_HHmmss", System.currentTimeMillis()) + ".png";
+                            path = H5Bridge.saveBytes(ctx, name, "image/png", data);
+                        } catch (Throwable t) {
+                            HookEntry.log("PageShot store failed: " + t);
+                        }
+                    }
+                    final byte[] outData = data;
+                    final String outPath = path;
+                    main.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (outData == null) {
+                                done(false, "图片编码失败");
+                                return;
+                            }
+                            try {
+                                HookEntry.log("PageShot saved: mode=" + logMode + " part=" + part
+                                        + " steps=" + step + " " + srcW + "x" + srcH
+                                        + " size=" + outData.length + " B path=" + outPath);
+                            } catch (Throwable ignored) {
+                            }
+                            done(true, outPath == null || outPath.length() == 0
+                                    ? "保存失败" : "长图已保存到相册");
+                        }
+                    });
                 }
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(256 * 1024);
-                bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
-                byte[] data = bos.toByteArray();
-                String name = "zybclean_" + android.text.format.DateFormat.format(
-                        "yyyyMMdd_HHmmss", System.currentTimeMillis()) + ".png";
-                String path = H5Bridge.saveBytes(ctx, name, "image/png", data);
-                HookEntry.log("PageShot saved: mode=" + modeOf() + " part=" + part + " steps=" + step
-                        + " " + bmp.getWidth() + "x" + bmp.getHeight()
-                        + " size=" + data.length + " B path=" + path);
-                if (bmp != out) bmp.recycle();
-                done(true, path == null || path.length() == 0 ? "保存失败" : "长图已保存到相册");
+            }, "zyb-shot").start();
+        }
+
+        /** 拼接画布（begin() 已算好 outW/outH/scale），JS 模式失败回退时才分配。 */
+        private void ensureOut() {
+            if (out != null) return;
+            try {
+                out = Bitmap.createBitmap(Math.max(1, outW), Math.max(1, outH),
+                        Bitmap.Config.ARGB_8888);
+                out.eraseColor(0xFFFFFFFF);
             } catch (Throwable t) {
-                done(false, "保存失败：" + t);
+                out = null;
+                HookEntry.log("PageShot ensureOut failed: " + t);
             }
         }
 
         /* ---------------- 新路线：整页撑开一次画完 ---------------- */
 
         /**
-         * 把 WebView 的高度临时改成整页高度、切软件层，等布局稳定后一次 {@code draw()} 拿全图。
+         * 把 WebView 的高度临时改成整页高度、切软件层，等布局真正到位后一次 {@code draw()} 拿全图。
          * 不滚动 → 没有接缝、没有重复段落；失败则回退到旧的逐屏拼接。
+         *
+         * <p>撑开后的高度一定会在 {@link #restoreExpandHeight()} 里还原：正常落笔、CLEAN 回调丢失、
+         * draw 抛异常、{@link #stitchFallback} 回退、{@link #done} 收尾、看门狗强杀，六条路都过这里。
+         * 否则 WebView 会永久停在 14000px（页面变白板，且每帧分配 60MB）。</p>
          */
         private void expandShot() {
-            int oldH;
             try {
                 android.view.ViewGroup.LayoutParams lp = wv.getLayoutParams();
                 if (lp == null) {
                     stitchFallback("no layout params");
                     return;
                 }
-                oldH = lp.height;
-                final int keepH = oldH;
+                final int keepH = lp.height;
                 int targetH = Math.round(cssScrollH * density) + 4;
                 if (targetH > MAX_EXPAND_H) targetH = MAX_EXPAND_H;
                 if (targetH <= vis.height()) {
                     stitchFallback("target too short " + targetH);
                     return;
                 }
+                // 撑开路径不拼接：总画布（最多 48MB）先释放，真要回退时由 stitchFallback 重建
                 if (out != null) {
-                    out.recycle();
+                    safeRecycle(out);
                     out = null;
                 }
-                lp.height = targetH;
-                wv.setLayoutParams(lp);
-                wv.requestLayout();
+                applyExpandedHeight(targetH);
                 HookEntry.log("PageShot expand: " + wv.getWidth() + "x" + targetH
                         + " (oldH=" + keepH + ")");
-                main.postDelayed(new Runnable() {
+                awaitExpandLayout(targetH, new Runnable() {
                     @Override
                     public void run() {
+                        // 布局到位后切软件层（硬件层在超长尺寸下拿不到像素），再等一帧栅格化
                         try {
                             wv.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
                         } catch (Throwable ignored) {
@@ -553,73 +677,141 @@ public final class PageShot {
                         main.postDelayed(new Runnable() {
                             @Override
                             public void run() {
-                                // 撑开/重排后广告条常会「复活」，落笔前再清一次，并刷新题目/解答分界
-                                try {
-                                    wv.evaluateJavascript(CLEAN, new ValueCallback<String>() {
-                                        @Override
-                                        public void onReceiveValue(String value) {
-                                            int s = -1;
-                                            int hid = -1;
-                                            try {
-                                                String v = value == null ? ""
-                                                        : value.replace("\"", "").trim();
-                                                int bar = v.indexOf('|');
-                                                if (bar >= 0) {
-                                                    s = Integer.parseInt(v.substring(0, bar).trim());
-                                                    hid = Integer.parseInt(v.substring(bar + 1).trim());
-                                                } else if (v.length() > 0) {
-                                                    s = Integer.parseInt(v);
-                                                }
-                                            } catch (Throwable ignored) {
-                                            }
-                                            if (s > 60) splitY = s;
-                                            HookEntry.log("PageShot clean split=" + s
-                                                    + " hidden=" + hid + " part=" + part);
-                                            main.postDelayed(new Runnable() {
-                                                @Override
-                                                public void run() {
-                                                    drawExpanded(keepH);
-                                                }
-                                            }, 420L);
-                                        }
-                                    });
-                                } catch (Throwable t) {
-                                    drawExpanded(keepH);
-                                }
+                                cleanThenDraw();
                             }
-                        }, 900L);
+                        }, LAYER_SETTLE_MS);
                     }
-                }, 1200L);
+                });
             } catch (Throwable t) {
                 stitchFallback("expand error " + t);
             }
         }
 
-        private void drawExpanded(int oldH) {
+        /** 记录撑开前的高度并撑开。只有它成功，{@link #restoreExpandHeight()} 才会动手。 */
+        private void applyExpandedHeight(int targetH) {
+            android.view.ViewGroup.LayoutParams lp = wv.getLayoutParams();
+            if (lp == null) throw new IllegalStateException("no layout params");
+            oldLpHeight = lp.height;
+            lp.height = targetH;
+            wv.setLayoutParams(lp);
+            wv.requestLayout();
+        }
+
+        /** 无论走到哪条失败路径都要还原（幂等：还原过一次后再调是空操作）。 */
+        private void restoreExpandHeight() {
+            int h = oldLpHeight;
+            if (h == Integer.MIN_VALUE) return;
+            oldLpHeight = Integer.MIN_VALUE;
+            restoreHeight(h);
+        }
+
+        /**
+         * 轮询等 WebView 真的撑到目标高度（且连续 2 帧高度不变），最长 {@link #EXPAND_WAIT_MS}。
+         *
+         * <p>原来的 1200ms + 900ms + 420ms 三段死等合计 2520ms，既慢又不够稳：小页面白等 2s，
+         * 大页面 900ms 又常常还没重新栅格化完（存出下半张白图）。改成「布局到位就继续」，
+         * 超时则落回原来的量级继续走（不会无限等）。</p>
+         */
+        private void awaitExpandLayout(final int targetH, final Runnable then) {
+            final long deadline = android.os.SystemClock.uptimeMillis() + EXPAND_WAIT_MS;
+            final boolean[] fired = new boolean[]{false};
+            final Runnable go = new Runnable() {
+                @Override
+                public void run() {
+                    if (fired[0]) return;
+                    fired[0] = true;
+                    then.run();
+                }
+            };
+            final int[] lastH = new int[]{-1};
+            final int[] stable = new int[]{0};
+            final Runnable poll = new Runnable() {
+                @Override
+                public void run() {
+                    if (fired[0]) return;
+                    int h = wv.getHeight();
+                    if (h == lastH[0]) {
+                        stable[0]++;
+                    } else {
+                        lastH[0] = h;
+                        stable[0] = 0;
+                    }
+                    boolean reached = h >= targetH - 8 && wv.getWidth() > 0;
+                    if (reached && stable[0] >= 2) {
+                        go.run();
+                        return;
+                    }
+                    if (android.os.SystemClock.uptimeMillis() >= deadline) {
+                        HookEntry.log("PageShot expand wait timeout h=" + h + "/" + targetH);
+                        go.run();
+                        return;
+                    }
+                    wv.postOnAnimation(this);
+                }
+            };
+            // 双保险：WebView 已 detach 时 postOnAnimation 只会挂在 RunQueue 里不回调
+            main.postDelayed(go, EXPAND_WAIT_MS + 200L);
+            wv.postOnAnimation(poll);
+        }
+
+        /** 撑开/重排后广告条常会「复活」，落笔前再清一次（CLEAN 不再探测文字分界）。 */
+        private void cleanThenDraw() {
+            try {
+                wv.evaluateJavascript(CLEAN, new ValueCallback<String>() {
+                    @Override
+                    public void onReceiveValue(String value) {
+                        int hid = -1;
+                        try {
+                            String v = value == null ? "" : value.replace("\"", "").trim();
+                            int bar = v.indexOf('|');
+                            String tail = bar >= 0 ? v.substring(bar + 1).trim() : v;
+                            if (tail.length() > 0) hid = Integer.parseInt(tail);
+                        } catch (Throwable ignored) {
+                        }
+                        HookEntry.log("PageShot clean hidden=" + hid + " part=" + part);
+                        main.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                drawExpanded();
+                            }
+                        }, CLEAN_SETTLE_MS);
+                    }
+                });
+            } catch (Throwable t) {
+                drawExpanded();
+            }
+        }
+
+        private void drawExpanded() {
             Bitmap bmp = null;
             try {
                 int h = Math.min(wv.getHeight(), MAX_EXPAND_H);
                 if (h <= 0) {
-                    restoreHeight(oldH);
                     stitchFallback("expanded height 0");
                     return;
                 }
+                // 保持 ARGB_8888：565 会把彩色公式/公式高亮的抗锯齿边缘压出色噪，
+                // 存下来的解答图肉眼可见变差；内存靠「画完立刻还原高度 + 后台编码」控制。
                 bmp = Bitmap.createBitmap(wv.getWidth(), h, Bitmap.Config.ARGB_8888);
                 bmp.eraseColor(0xFFFFFFFF);
                 wv.draw(new Canvas(bmp));
                 int ink = inkPixels(bmp);
-                restoreHeight(oldH);
-                HookEntry.log("PageShot expand ink=" + ink + " size=" + bmp.getWidth() + "x" + h);
+                int w = bmp.getWidth();
+                // 像素已经拿到手，立刻还原高度：后续编码在后台线程，没必要占着 14000px
+                restoreExpandHeight();
+                HookEntry.log("PageShot expand ink=" + ink + " size=" + w + "x" + h);
                 if (ink < 300) {
-                    bmp.recycle();
+                    safeRecycle(bmp);
+                    bmp = null;
                     stitchFallback("blank ink=" + ink);
                     return;
                 }
                 mode = MODE_EXPAND;
-                saveBitmap(bmp);
+                Bitmap hand = bmp;
+                bmp = null;   // 所有权交给 saveBitmap（后台线程编码完回收）
+                saveBitmap(hand);
             } catch (Throwable t) {
-                if (bmp != null) bmp.recycle();
-                restoreHeight(oldH);
+                safeRecycle(bmp);
                 stitchFallback("draw error " + t);
             }
         }
@@ -642,9 +834,12 @@ public final class PageShot {
 
         private void stitchFallback(String why) {
             HookEntry.log("PageShot expand failed -> stitch: " + why);
+            // 先还原高度：不然回退拼接每帧要 draw 1080×14000（60MB/帧），页面也还是超长白板
+            restoreExpandHeight();
             mode = MODE_JS;
             step = 0;
             coveredPx = 0;
+            ensureOut();
             try {
                 wv.evaluateJavascript(
                         "(function(){try{window.scrollTo(0,0);}catch(e){}})()", null);
@@ -672,20 +867,45 @@ public final class PageShot {
             }
         }
 
+        /** 看门狗入口：正常路径下 done() 已经把 finished 置真，这里就是空转。 */
+        void watchdog() {
+            if (finished) return;
+            HookEntry.log("PageShot watchdog: capture exceeded " + BUSY_TIMEOUT_MS
+                    + "ms, force release");
+            done(false, "长图超时，已中止");
+        }
+
+        /** 唯一的收尾出口：幂等，且必定复位 {@code sBusy}（finally）。 */
         private void done(boolean ok, String msg) {
-            restoreNative();
-            try {
-                wv.evaluateJavascript(RESTORE, null);
-            } catch (Throwable ignored) {
+            synchronized (this) {
+                if (finished) return;
+                finished = true;
             }
             try {
-                if (out != null) out.recycle();
+                restoreExpandHeight();   // 兜底：任何路径都不许把 WebView 留在 14000px
+                restoreNative();
+                try {
+                    wv.evaluateJavascript(RESTORE, null);
+                } catch (Throwable ignored) {
+                }
+                safeRecycle(out);
+                if (msg != null && msg.length() > 0) toast(ctx, msg);
+                if (!ok) HookEntry.log("PageShot failed: " + msg);
+            } catch (Throwable t) {
+                HookEntry.log("PageShot done error: " + t);
+            } finally {
+                out = null;
+                sBusy = false;
+                sBusyAt = 0L;
+            }
+        }
+
+        private static void safeRecycle(Bitmap b) {
+            if (b == null) return;
+            try {
+                if (!b.isRecycled()) b.recycle();
             } catch (Throwable ignored) {
             }
-            out = null;
-            sBusy = false;
-            if (msg != null && msg.length() > 0) toast(ctx, msg);
-            if (!ok) HookEntry.log("PageShot failed: " + msg);
         }
 
         private void restoreNative() {
@@ -731,7 +951,10 @@ public final class PageShot {
 
     /**
      * 探测滚动信息并临时隐藏浮层。返回
-     * {@code 宽|scrollH|clientH|innerH|rectX|rectY|rectW|rectH|innerScroller}。
+     * {@code 宽|scrollH|clientH|innerH|rectX|rectY|rectW|rectH|innerScroller|split}。
+     *
+     * <p>第十段 {@code split} 现在恒为 {@code 0}（存整页）：原来的「答案/解析/解答…」文字探测
+     * 属于用户明令删除的死线，隐藏浮层只按 position / tag / class / 素材 CDN 判定。</p>
      */
     private static final String PREP =
             "(function(){try{"
@@ -753,9 +976,8 @@ public final class PageShot {
                     + "var r=e.getBoundingClientRect();"
                     + "if(r.width>0&&r.height>0&&r.height<window.innerHeight*0.6){"
                     + "hidden.push(e);e.style.setProperty('display','none','important');}}}"
-                    /* 垃圾清理：视频讲解卡、广告 banner、促销条一律不进图 */
-                    + "var KILL=[/本题精讲/,/讲解(中|视频)/,/视频讲解/,/双十一/,/^广告$/,"
-                    + "/开通会员/,/立即开通/,/限时/,/秒杀/,/领券/,/领取/];"
+                    /* 垃圾清理：视频讲解卡、会员推广卡一律不进图。
+                       判定只用结构特征（tag / class / 素材 CDN），绝不看文案 —— 文案匹配是用户死线。 */
                     + "function upHide(e){var t=e;"
                     + "for(var i=0;i<5&&t&&t.parentElement&&t!==document.body;i++){"
                     + "var r=t.getBoundingClientRect();"
@@ -776,11 +998,7 @@ public final class PageShot {
                     + "if(cls&&HRE.test(cls)){hide(n2);continue;}"
                     + "if(tag==='IMG'&&VCDN.test(n2.currentSrc||n2.src||'')){upHide(n2);continue;}"
                     + "if(cls&&ADRE.test(cls)){var ar=n2.getBoundingClientRect();"
-                    + "if(ar.height>=60&&ar.height<window.innerHeight*0.6){hide(n2);continue;}}"
-                    + "if(n2.children.length)continue;"
-                    + "var tx=(n2.textContent||'').replace(/\\s+/g,' ').trim();"
-                    + "if(!tx||tx.length>40)continue;"
-                    + "for(var q=0;q<KILL.length;q++){if(KILL[q].test(tx)){upHide(n2);break;}}}"
+                    + "if(ar.height>=60&&ar.height<window.innerHeight*0.6){hide(n2);continue;}}}"
                     + "var sc=document.scrollingElement||document.documentElement;"
                     + "var target=sc,inner=false,best=sc.scrollHeight;"
                     + "var cands=document.querySelectorAll('div,section,main,article');"
@@ -790,16 +1008,9 @@ public final class PageShot {
                     + "if((oy==='auto'||oy==='scroll')&&n.scrollHeight>n.clientHeight+80"
                     + "&&n.clientHeight>=window.innerHeight*0.5&&n.scrollHeight>best){"
                     + "best=n.scrollHeight;target=n;inner=true;}}"
+                    /* 题目/解答分界不再按文字探测（「答案/解析/…」是用户死线）：恒为 0 = 存整页，
+                       真的要分段时由 Java 侧传入 splitY。info() 仍保留 split 字段位以兼容 parse()。 */
                     + "var split=0;"
-                    + "try{var heads=document.querySelectorAll('div,span,p,h1,h2,h3,h4,strong,b,em');"
-                    + "for(var hh=0;hh<heads.length;hh++){var he=heads[hh];"
-                    + "var ht=(he.textContent||'').replace(/\\s/g,'');"
-                    + "if(!ht||ht.length>6)continue;"
-                    + "if(!/^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$/.test(ht))continue;"
-                    + "var hr=he.getBoundingClientRect();"
-                    + "if(hr.height<=0||hr.height>90)continue;"
-                    + "var hy=Math.round(hr.top+(window.pageYOffset||0));"
-                    + "if(hy>60&&(split===0||hy<split))split=hy;}}catch(e){}"
                     + "window.__zybStop=1;"
                     + "window.__zybShot={hidden:hidden,target:target,inner:inner,"
                     + "info:function(){var r=target.getBoundingClientRect();"
@@ -824,16 +1035,12 @@ public final class PageShot {
 
     /**
      * 截图落笔前的第二次清理：页面在撑开/重排后会重新渲染 React 节点，
-     * PREP 阶段隐藏掉的广告条会「复活」。这里再扫一遍并重新计算题目/解答分界。
+     * PREP 阶段隐藏掉的广告条会「复活」。这里再扫一遍（只按 class/素材 URL 判定，不看文案）。
      *
-     * @return 分界 y（CSS px，0 表示没找到）
+     * @return {@code "0|hiddenN"}（split 恒为 0：不再按文字探测题目/解答分界）
      */
     private static final String CLEAN =
             "(function(){try{"
-                    + "var KILL=[/本题精讲/,/讲解(中|视频)/,/视频讲解/,/双十一/,/新客专享/,"
-                    + "/元\\s*\\/\\s*月/,/立即抢/,/即将结束/,/开通会员/,/立即开通/,"
-                    + "/限时/,/秒杀/,/领券/,/领取/,/^广告$/,/特惠/,/优惠/,"
-                    + "/立即下载/,/下载\\s*App/i,/扫码/];"
                     + "var ADRE=/(^|[\\s_-])(ad|ads|advert|advertisement|banner|promo|promotion|gg|coupon|sales)([\\s_-]|$)/i;"
                     + "var HRE=/(video__promotion|vip-video-explain|single-video__wrapper|"
                     + "video__payBox|video-poster__wrapper|poster-player__wrapper|relate-video|"
@@ -853,24 +1060,12 @@ public final class PageShot {
                     + "if(cls&&HRE.test(cls)){hide(n);continue;}"
                     + "if(n.tagName==='IMG'&&VCDN.test(n.currentSrc||n.src||'')){upHide(n);continue;}"
                     + "if(cls&&ADRE.test(cls)){var ar=n.getBoundingClientRect();"
-                    + "if(ar.height>=40&&ar.height<vh*0.7){hide(n);continue;}}"
-                    + "if(n.childElementCount>4)continue;"
-                    + "var tx=(n.textContent||'').replace(/\\s+/g,' ').trim();"
-                    + "if(!tx||tx.length>40)continue;"
-                    + "for(var q=0;q<KILL.length;q++){if(KILL[q].test(tx)){upHide(n);break;}}}}"
+                    + "if(ar.height>=40&&ar.height<vh*0.7){hide(n);continue;}}}}"
                     + "scan(document);"
                     + "var hosts=document.querySelectorAll('*');"
                     + "for(var s=0;s<hosts.length;s++){try{if(hosts[s].shadowRoot)scan(hosts[s].shadowRoot);}catch(e){}}"
-                    + "var split=0;"
-                    + "var heads=document.querySelectorAll('div,span,p,h1,h2,h3,h4,strong,b,em');"
-                    + "for(var i2=0;i2<heads.length;i2++){var h2=heads[i2];"
-                    + "var t2=(h2.textContent||'').replace(/[\\s\\u00a0]/g,'');"
-                    + "if(!t2||t2.length>6)continue;"
-                    + "if(!/^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$/.test(t2))continue;"
-                    + "var r2;try{r2=h2.getBoundingClientRect();}catch(e){continue;}"
-                    + "if(r2.height<=0||r2.height>90)continue;"
-                    + "var top=r2.top+(window.pageYOffset||0);"
-                    + "if(top>60&&(split===0||top<split))split=top;}"
-                    + "return String(Math.round(split))+\"|\"+hid;"
+                    /* 题目/解答分界不再按文字探测（「答案/解析/…」是用户死线）：恒为 0 = 存整页，
+                       真要分段由 Java 侧传入 splitY。返回值保持 "split|hidden" 两段格式。 */
+                    + "return \"0|\"+hid;"
                     + "}catch(e){return '';}})()";
 }

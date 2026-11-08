@@ -83,7 +83,13 @@ public final class H5Bridge {
         });
     }
 
-    /** 供 {@link PageShot} 落盘（复用相册写入的三级回落逻辑）。 */
+    /**
+     * 供 {@link PageShot} 落盘（复用相册写入的三级回落逻辑）。
+     *
+     * <p><b>线程安全</b>：不碰 WebView，只用 {@code ContentResolver} / 文件 IO，
+     * 内部 Handler 取自 {@code Looper.getMainLooper()}，因此可以在任意后台线程调用
+     * （PageShot 的 PNG 编码与写相册都跑在 {@code zyb-shot} 线程上，避免主线程 ANR）。</p>
+     */
     static String saveBytes(Context context, String name, String mime, byte[] data) {
         if (context == null || data == null || data.length == 0) return "";
         return new H5Bridge(context, null).store(sanitize(name, mime), mime, data);

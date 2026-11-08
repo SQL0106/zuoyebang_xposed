@@ -107,10 +107,18 @@ public class FeedKiller {
                     protected void beforeHookedMethod(MethodHookParam param) {
                         if (count) {
                             param.setResult(0);
-                        } else {
-                            param.args[0] = new ArrayList<>();
-                            HookEntry.log("feed emptied at " + param.method.getName());
+                            return;
                         }
+                        // 就地清空，保持 List 实例不变（换新 List 会让持有旧引用的分页组件写丢数据）。
+                        Object arg = param.args != null && param.args.length > 0 ? param.args[0] : null;
+                        if (arg instanceof List) {
+                            try {
+                                ((List<?>) arg).clear();
+                            } catch (Throwable t) {
+                                param.args[0] = new ArrayList<Object>();
+                            }
+                        }
+                        HookEntry.log("feed emptied at " + param.method.getName());
                     }
                 });
                 hooked++;
@@ -157,13 +165,34 @@ public class FeedKiller {
 
     private static class FeedFilterHook extends XC_MethodHook {
         @Override
+        @SuppressWarnings("unchecked")
         protected void beforeHookedMethod(MethodHookParam param) {
             if (param.args == null || param.args.length == 0) return;
-            if (!(param.args[0] instanceof List)) return;
-            List<?> in = (List<?>) param.args[0];
+            Object arg = param.args[0];
+            if (!(arg instanceof List)) return;
+            List<Object> in = (List<Object>) arg;
             probe(param.thisObject, in);
-            Object out = filter((List<?>) param.args[0]);
-            if (out != null) param.args[0] = out;
+
+            // 就地过滤：List 实例不变。调用方（分页组件 / loadMore）持的是同一个引用，
+            // 换成新 List 会让后续 addAll 写进旧 List 而 adapter 看不到（分页/追加数据丢失）。
+            int before = in.size();
+            try {
+                in.removeIf(FeedKiller::isAdItem);
+            } catch (Throwable t) {
+                // 原 List 不可变才退化为「在原 List 基础上过滤后写回」，未命中的元素一个不丢。
+                List<Object> kept = new ArrayList<Object>(before);
+                for (int i = 0; i < before; i++) {
+                    Object o = in.get(i);
+                    if (!isAdItem(o)) kept.add(o);
+                }
+                param.args[0] = kept;
+                HookEntry.log("feed list not modifiable, rewrote " + before + " -> " + kept.size());
+                return;
+            }
+            int after = in.size();
+            if (after != before) {
+                HookEntry.log("feed filtered in place " + before + " -> " + after);
+            }
         }
 
         @Override
@@ -224,23 +253,6 @@ public class FeedKiller {
         if (after != before) {
             HookEntry.log("field d filtered " + before + " -> " + after);
         }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Object filter(List<?> in) {
-        if (in.isEmpty()) return null;
-        List<Object> kept = null;
-        for (int i = 0; i < in.size(); i++) {
-            Object o = in.get(i);
-            if (isAdItem(o)) {
-                if (kept == null) kept = new ArrayList<>(in.subList(0, i));
-            } else if (kept != null) {
-                kept.add(o);
-            }
-        }
-        if (kept == null) return null;
-        HookEntry.log("feed filtered " + in.size() + " -> " + kept.size());
-        return kept;
     }
 
     private static boolean isAdItem(Object item) {
