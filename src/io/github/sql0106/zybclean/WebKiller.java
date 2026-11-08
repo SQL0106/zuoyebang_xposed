@@ -88,6 +88,14 @@ public class WebKiller {
             + "var cs;try{cs=getComputedStyle(p);}catch(e2){break;}"
             + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){hide(p);break;}p=p.parentElement;}}"
             + "}}catch(e){}}"
+            /* 顶部选项卡一旦被任何旧规则藏掉，这里强制还原，保证「结果N」都在。 */
+            + "function repairNav(){try{"
+            + "var ns=document.querySelectorAll('#pageNav [class*=\"navItem\"],[class*=\"navBox\"]>*');"
+            + "for(var i=0;i<ns.length;i++){var n=ns[i];"
+            + "if(n.style&&n.style.display==='none')n.style.display='';"
+            + "var im=n.querySelector&&n.querySelector('[class*=\"aiSolveTab\"]');"
+            + "if(im&&im.style&&im.style.display==='none')im.style.display='';}"
+            + "}catch(e){}}"
             /* ---------- 3. 悬浮工具条 ---------- */
             /* 取正文：必须在“活”的 DOM 上走，cloneNode 的 innerText 会退化成 textContent，
                把 <script> 内容和 display:none 的隐藏 tab 全带出来（用户实测过）。 */
@@ -235,7 +243,7 @@ public class WebKiller {
             + "var t=(document.body&&document.body.textContent)||'';"
             + "var ok=t.length>200&&/(答案|解析|解答|题目)/.test(t);"
             + "bar.style.display=ok?'flex':'none';}"
-            + "function loop(){if(window.__zybCapture)return;scanKill();mkBar();gate();}"
+            + "function loop(){if(window.__zybCapture)return;scanKill();repairNav();mkBar();gate();}"
 
             /* ---------- 4. 常驻（必须防抖：DOM 一变就全量扫会拖死加载） ---------- */
             + "loop();"
