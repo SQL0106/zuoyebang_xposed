@@ -294,6 +294,33 @@ public class WebKiller {
             } catch (Throwable t) {
                 HookEntry.log("WebKiller long-click hook failed: " + t);
             }
+            // 不管页面是刚开还是早就开着：只要作业帮某个 Activity 回到前台，就补一次定位（每个根 View 只扫一次）。
+            try {
+                Class<?> activity = XposedHelpers.findClass("android.app.Activity", cl);
+                XposedBridge.hookAllMethods(activity, "onResume", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            if (!param.thisObject.getClass().getName()
+                                    .startsWith("com.baidu.homework")) return;
+                            Object win = XposedHelpers.callMethod(param.thisObject, "getWindow");
+                            if (win == null) return;
+                            final Object decor = XposedHelpers.callMethod(win, "getDecorView");
+                            if (decor == null) return;
+                            if (BIND_ROOTS.containsKey(decor)) return;
+                            XposedHelpers.callMethod(decor, "postDelayed", new Runnable() {
+                                @Override
+                                public void run() {
+                                    bindNativeLongPress(decor);
+                                }
+                            }, Long.valueOf(800L));
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+            } catch (Throwable t) {
+                HookEntry.log("WebKiller resume hook failed: " + t);
+            }
             HookEntry.log("WebKiller installed");
         } catch (Throwable t) {
             HookEntry.log("WebKiller install failed: " + t);
@@ -312,8 +339,6 @@ public class WebKiller {
                             XposedHelpers.callMethod(webView, "evaluateJavascript", JS, null);
                         } catch (Throwable ignored) {
                         }
-                        // 页面渲染完再绑：底部蓝色「再拍一页」是原生按钮，长按它唤回浮窗。
-                        bindNativeLongPress(webView);
                     }
                 }, Long.valueOf(delay));
             } catch (Throwable t) {
@@ -321,58 +346,155 @@ public class WebKiller {
                 return;
             }
         }
+        // 底部蓝色「再拍一页」是原生按钮，长按它唤回浮窗。
+        // 只扫一次：绑上就不再扫（BIND_ROOTS 记根 View），绑不上最多再试一次。
+        scheduleBind(webView, 0);
+    }
+
+    /** 每个根 View 只做一次全树定位，之后不再重复遍历（作业帮页面本来就卡）。 */
+    private static final WeakHashMap<Object, Boolean> BIND_ROOTS = new WeakHashMap<Object, Boolean>();
+
+    private static void scheduleBind(final Object webView, final int attempt) {
+        try {
+            Object root = XposedHelpers.callMethod(webView, "getRootView");
+            if (root instanceof android.view.View && BIND_ROOTS.containsKey(root)) return;
+            XposedHelpers.callMethod(webView, "postDelayed", new Runnable() {
+                @Override
+                public void run() {
+                    int n = bindNativeLongPress(webView);
+                    if (n <= 0 && attempt < 1) scheduleBind(webView, attempt + 1);
+                }
+            }, Long.valueOf(1800L));
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
-     * 底部蓝色「再拍一页」是原生 View（不是 H5），资源 id 不可用，只能按几何认：
-     * 贴底、宽 ≥ 40% 屏宽、高 60~320。给命中者挂长按 → 唤回网页里的悬浮工具条。
+     * 底栏原生组件（全限定类名，App 升级也不变）：整条底栏都在这里面。
      */
-    private static void bindNativeLongPress(Object webView) {
+    private static final String BOTTOM_BAR_CLASS =
+            "com.baidu.homework.activity.search.newsearchv3.ai.AISearchBottomInputView";
+
+    /**
+     * 实测 resource id（真机 dumpsys activity top，14.34.0/1738）：
+     * #7f090be3 = 蓝按钮容器 LinearLayout 399,28-1238,182（839x154）
+     * #7f0911f7 = 容器里可点击的 FrameLayout 0,0-839,154（VFE...C..）
+     */
+    private static final int ID_BLUE_WRAP = 0x7f090be3;
+    private static final int ID_BLUE_TAP = 0x7f0911f7;
+
+    /**
+     * 长按底部蓝色「再拍一页 / 再拍一题」→ 唤回网页里被隐藏的悬浮工具条。
+     * 定位顺序：精确 resource id → 容器 id → 底栏类名内按几何（宽≥40%、高 60~320）。
+     * 不读任何文字；每个根 View 只做一次，绑上即停。
+     */
+    private static int bindNativeLongPress(Object anchor) {
         try {
-            Object root = XposedHelpers.callMethod(webView, "getRootView");
-            if (!(root instanceof android.view.View)) return;
-            android.view.View rv = (android.view.View) root;
-            int w = rv.getWidth();
-            int h = rv.getHeight();
-            if (w <= 0 || h <= 0) return;
-            int[] loc = new int[2];
-            rv.getLocationOnScreen(loc);
-            int bound = walkBind(rv, w, loc[1] + h, 0, 0);
+            android.view.View rv = rootOf(anchor);
+            if (rv == null || rv.getWidth() <= 0) return 0;
+            if (BIND_ROOTS.containsKey(rv)) return 0;
+            android.view.View target = findBlueButton(rv);
+            int bound = 0;
+            if (target != null && bindOne(target)) bound = 1;
+            if (bound > 0) BIND_ROOTS.put(rv, Boolean.TRUE);
             if (bound > 0 || bindLogs < 6) {
                 bindLogs++;
-                HookEntry.log("WebKiller bind native: root=" + w + "x" + h
-                        + " bottom=" + (loc[1] + h) + " bound=" + bound);
+                HookEntry.log("WebKiller bind native: root=" + rv.getWidth() + "x" + rv.getHeight()
+                        + " found=" + (target == null ? "null" : describe(target))
+                        + " bound=" + bound);
             }
+            return bound;
         } catch (Throwable t) {
             HookEntry.log("WebKiller bind native failed: " + t);
+            return 0;
         }
     }
 
     private static int bindLogs;
 
-    private static int walkBind(android.view.View v, int rootW, int rootBottom, int depth, int count) {
-        if (!(v instanceof android.view.ViewGroup)) return count;
-        if (depth > 40) return count;
+    private static android.view.View rootOf(Object anchor) {
+        try {
+            Object root = XposedHelpers.callMethod(anchor, "getRootView");
+            if (root instanceof android.view.View) return (android.view.View) root;
+        } catch (Throwable ignored) {
+        }
+        if (anchor instanceof android.view.View) return ((android.view.View) anchor).getRootView();
+        return null;
+    }
+
+    private static String describe(android.view.View v) {
+        try {
+            return v.getClass().getName() + "#" + Integer.toHexString(v.getId())
+                    + " " + v.getWidth() + "x" + v.getHeight();
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private static android.view.View findBlueButton(android.view.View root) {
+        android.view.View v = null;
+        try {
+            v = root.findViewById(ID_BLUE_TAP);
+        } catch (Throwable ignored) {
+        }
+        if (v == null) {
+            try {
+                v = root.findViewById(ID_BLUE_WRAP);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (v != null && v.getWidth() > 0) return tapOf(v);
+        // id 变了（App 升级）：只在这一条底栏内部找，不做全树瞎扫。
+        android.view.View bar = findByClass(root, BOTTOM_BAR_CLASS, 0);
+        if (bar == null) return null;
+        int barW = bar.getWidth();
+        if (barW <= 0) return null;
+        return findWideClickable(bar, barW, 0);
+    }
+
+    /** 挂到真正可点击的那一层（容器本身不可点，里面那层 FrameLayout 才是）。 */
+    private static android.view.View tapOf(android.view.View v) {
+        if (!(v instanceof android.view.ViewGroup)) return v;
         android.view.ViewGroup g = (android.view.ViewGroup) v;
-        int n = g.getChildCount();
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < g.getChildCount(); i++) {
             android.view.View c = g.getChildAt(i);
-            if (c == null || c instanceof android.webkit.WebView) continue;
-            if (c.getVisibility() != android.view.View.VISIBLE) continue;
+            if (c != null && c.isClickable() && c.getWidth() > 0) return c;
+        }
+        return v;
+    }
+
+    private static android.view.View findByClass(android.view.View v, String name, int depth) {
+        if (depth > 40) return null;
+        if (name.equals(v.getClass().getName())) return v;
+        if (!(v instanceof android.view.ViewGroup)) return null;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            android.view.View c = g.getChildAt(i);
+            if (c == null) continue;
+            android.view.View r = findByClass(c, name, depth + 1);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    private static android.view.View findWideClickable(android.view.View v, int barW, int depth) {
+        if (depth > 20) return null;
+        if (!(v instanceof android.view.ViewGroup)) return null;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0; i < g.getChildCount(); i++) {
+            android.view.View c = g.getChildAt(i);
+            if (c == null || c.getVisibility() != android.view.View.VISIBLE) continue;
+            if (c instanceof android.webkit.WebView) continue;
             int cw = c.getWidth();
             int ch = c.getHeight();
-            if (cw > 0 && ch > 0) {
-                int[] loc = new int[2];
-                c.getLocationOnScreen(loc);
-                int bottom = loc[1] + ch;
-                boolean hit = cw >= rootW * 40 / 100
-                        && ch >= 60 && ch <= 320
-                        && bottom >= rootBottom - 90 && bottom <= rootBottom + 20;
-                if (hit && bindOne(c)) count++;
+            if (cw >= barW * 40 / 100 && ch >= 60 && ch <= 320) {
+                android.view.View tap = tapOf(c);
+                return tap == null ? c : (tap.isClickable() ? tap : c);
             }
-            count = walkBind(c, rootW, rootBottom, depth + 1, count);
+            android.view.View r = findWideClickable(c, barW, depth + 1);
+            if (r != null) return r;
         }
-        return count;
+        return null;
     }
 
     private static boolean bindOne(final android.view.View target) {
@@ -388,8 +510,8 @@ public class WebKiller {
             }
         };
         try {
-            XposedHelpers.callMethod(target, "setOnLongClickListener", l);
-            XposedHelpers.callMethod(target, "setLongClickable", Boolean.TRUE);
+            target.setOnLongClickListener(l);
+            target.setLongClickable(true);
             HookEntry.log("WebKiller native long-press bound: "
                     + target.getClass().getName() + " " + target.getWidth() + "x" + target.getHeight());
             return true;
