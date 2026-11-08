@@ -727,3 +727,73 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 3. **定时器降频 + 后台停摆**：`setInterval(loop,1500)` → `setInterval(function(){if(document.hidden)return;loop();},3000)`；
    `AnswerPageKiller.DELAYS` 从 5 个（500/1200/2800/6000/12000）减到 3 个（600/2000/6000）；
    截图期间 `window.__zybCapture=1`，`loop()` 直接 return，避免截图与扫描互抢主线程。
+
+---
+
+## 30. 2026-11-08 —— 1.2.9：分段长截图 + 清掉「复活的」H5 视频推广与历史记录页贴底横幅
+
+### 30.1 分段长截图（存题目 / 存解答+解析）
+1.2.6 只有整页长图。1.2.9 在 `PageShot` 里加了"分界 y"：
+
+- `PREP` 阶段在页面里找小标题（`div,span,p,h1..h4,strong,b,em`，`textContent` 去空白后长度 ≤6 且完全匹配
+  `^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$`），取其中最靠上的 `getBoundingClientRect().top + pageYOffset` 作为 `split`；
+- `info()` 返回的第 10 段就是 `splitY`（CSS px），`PageShot.splitY` 保存；
+- 落图后 `cropPart(whole)`：`splitPx = round(splitY * density)`，越界（`splitY<=0`、`<40`、`>h-40`）就存整页；
+- `H5Bridge.shotPart("q"|"a")` 决定存哪一段，工具条按钮 `h.shotPart('q')`=存题目、`h.shotPart('a')`=存解答。
+
+### 30.2 H5 视频会员推广：按 class + 素材域名精确隐藏
+WebEyes dump 证据（`paisou.zuoyebang.com/.../paisou-*.html`，366 宽视口）：
+```
+div.video.monitor-dom.vip-video-explain-v2.white_bg   box=20,178,325x275   ← 「本题精讲」付费卡
+div.video__promotion                                  box=20,215,325x44    ← 纯背景图广告（无文字！）
+div.single-video__wrapper / video__payBox             box=20,271,325x182
+div.video-poster__wrapper / poster-player__wrapper / biz-poster
+div.relate-video                                      box=0,474,366x102    ← 相关视频
+div.paisou-svip-video.v3Ui / new-poster               box=20,895,325x212   ← 本题考点视频
+```
+促销条的背景是 `url(https://zyb-vip.cdnjtzy.com/commonpub/….png)`——**纯图片、没有任何文字**，
+所以按文字匹配永远抓不到；资源 id 在 dump 里全被写成 `zyb`（探针写死前缀），也不能 `findViewById`。
+最终规则（`PageShot.PREP`、`PageShot.CLEAN`、`WebKiller` 注入 CSS **三处一致**）：
+```js
+var HRE=/(video__promotion|vip-video-explain|single-video__wrapper|video__payBox|
+          video-poster__wrapper|poster-player__wrapper|relate-video|
+          paisou-svip-video|new-poster|biz-poster)/;
+var VCDN=/zyb-vip\.cdnjtzy\.com/i;
+if (cls && HRE.test(cls)) hide(node);                       // 命中类名直接藏
+if (tag==='IMG' && VCDN.test(src||currentSrc)) upHide(node); // 命中素材域名向上藏容器
+```
+**必须避开**：`div.index-module_sec_*`（题干/答案正文）、`div.index-module_feedback_*`（反馈按钮）、
+`div#aiwenwen…`（问小帮）、`div#zyb-bar`（模块自己的工具条）。
+
+为什么要写三处：`PREP` 在撑开前藏一遍；撑开 + `LAYER_TYPE_SOFTWARE` 后 React 会重渲染把节点"复活"，
+`CLEAN` 在 `draw` 前 420ms 再扫一遍并把分界一并重算；`WebKiller` 的 `<style>` 管用户平时浏览时的观感
+（注意：`window.__zybclean` 已置 1 时整段注入 JS 直接 return，**旧页面要重载才应用新 CSS**）。
+
+### 30.3 历史记录页贴底金色横幅（几何定位，不看文字）
+`UserAskRecordActivity` 底部「高效学习，一个VIP就够了」横幅，dump 形状：
+```
+View           box=0,2561-1280,2562    ← 1px 分隔线
+RelativeLayout box=0,2562-1280,2800    ← 横幅本体：全宽、贴底、高 238（屏 1280x2800）
+  TextView     text=高效学习，一个VIP就够了
+```
+判定条件（`AnswerPageKiller.walkBanner`）：
+```
+depth>0 && w >= dw*95/100 && h >= 80 && h <= dh*3/10 && bottom ∈ [dh-6, dh+6]
+```
+命中后 `hideSiblingAbove(v)` 顺手藏上方 ≤12px 的兄弟（那条 1px 分隔线），再 `hide(v)`。
+
+**两个坑**：
+1. **hook 载体不能是目标 Activity 本身**。第一版 `findClass(RECORD_ACTIVITY)` 再 `hookAllMethods(act,"onResume")`，
+   日志照样打印 `record banner hook ok`，但方法一条都没挂上——因为 `UserAskRecordActivity` 没自己声明 `onResume`，
+   继承自基类。改成 hook **`android.app.Activity.onResume`**，进来先做一次 `RECORD_ACTIVITY.equals(getClass().getName())`
+   字符串比较过滤（开销可忽略，远小于全量遍历），放行才 `postDelayed`。
+2. **只扫一次不够**。横幅是后加载的，`BANNER_DELAYS = {800,2500,5000,9000}` 四档各扫一次；
+   无命中时打 `probe …` / `probe no hit` 便于排查（`probeCount<10` 限制日志量）。
+
+真机验证日志：
+```
+AnswerPageKiller: probe LinearLayout w=1280 h=2800 top=0 bottom=2800
+AnswerPageKiller: probe SecureListView w=1280 h=2491 top=309 bottom=2800
+AnswerPageKiller: banner RelativeLayout h=238 top=2562
+AnswerPageKiller: hid 1 bottom banner(s)
+```
