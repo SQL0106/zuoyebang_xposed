@@ -21,7 +21,7 @@ import java.util.List;
 public class AnswerPageKiller {
 
     private static final int GONE = 8;
-    private static final long[] DELAYS = {500L, 1200L, 2800L, 6000L, 12000L};
+    private static final long[] DELAYS = {600L, 2000L, 6000L};
 
     /** 需要干掉的文字（去掉空格后精确匹配）。 */
     private static final String[] KILL_TEXTS = {

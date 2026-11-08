@@ -59,7 +59,9 @@ public class WebKiller {
             + "var AI=/^AI(解题|讲题|答疑)$/i;"
             + "function scanKill(){try{"
             + "var els=document.querySelectorAll('div,span,li,a,button,p,section,em,strong');"
-            + "for(var i=0;i<els.length;i++){var el=els[i];"
+            + "var n=els.length>2500?2500:els.length;"
+            + "for(var i=0;i<n;i++){var el=els[i];"
+            + "if(el.childElementCount>4)continue;"
             + "var t=(el.textContent||'').replace(/\\s+/g,' ').trim();"
             + "if(!t||t.length>30)continue;"
             + "var r;try{r=el.getBoundingClientRect();}catch(e3){continue;}"
@@ -171,16 +173,19 @@ public class WebKiller {
             + "bar.appendChild(mk('下载图片','#10b981',function(){downloadAll();}));"
             + "document.body.appendChild(bar);}"
             + "function gate(){var bar=document.getElementById('zyb-bar');if(!bar)return;"
-            + "var t=(document.body&&document.body.innerText)||'';"
+            + "if(window.__zybCapture){bar.style.display='none';return;}"
+            + "var t=(document.body&&document.body.textContent)||'';"
             + "var ok=t.length>200&&/(答案|解析|解答|题目)/.test(t);"
             + "bar.style.display=ok?'flex':'none';}"
-            + "function loop(){scanKill();mkBar();gate();}"
+            + "function loop(){if(window.__zybCapture)return;scanKill();mkBar();gate();}"
 
-            /* ---------- 4. 常驻 ---------- */
+            /* ---------- 4. 常驻（必须防抖：DOM 一变就全量扫会拖死加载） ---------- */
             + "loop();"
-            + "try{new MutationObserver(function(){loop();})"
+            + "var pend=0;"
+            + "try{new MutationObserver(function(){"
+            + "if(pend)return;pend=1;setTimeout(function(){pend=0;loop();},450);})"
             + ".observe(document.documentElement,{childList:true,subtree:true});}catch(e){}"
-            + "setInterval(loop,1500);"
+            + "setInterval(function(){if(document.hidden)return;loop();},3000);"
             + "})()";
     }
 

@@ -31,13 +31,15 @@ import java.io.ByteArrayOutputStream;
 public final class PageShot {
 
     private static final int MAX_STEPS = 60;
-    private static final long SETTLE_MS = 460L;
+    private static final long SETTLE_MS = 700L;
     private static final double MAX_PIXELS = 1.2e7;
     private static final int MAX_OUT_HEIGHT = 20000;
 
     private static final int MODE_JS = 1;
     private static final int MODE_NATIVE = 2;
     private static final int MODE_SINGLE = 3;
+    private static final int MODE_EXPAND = 4;
+    private static final int MAX_EXPAND_H = 14000;
 
     private static volatile boolean sBusy = false;
 
@@ -89,10 +91,14 @@ public final class PageShot {
         private int outW;
         private int outH;
         private Bitmap out;
+        private android.view.Window win;
+        private final int[] wvLoc = new int[2];
 
         private int mode = MODE_SINGLE;
         private int step;
         private int steps;
+        private int jsTries;
+        private int coveredPx;
         private int accOffset;
         private View scroller;
         private int scrollerStartY;
@@ -105,6 +111,8 @@ public final class PageShot {
         void start() {
             try {
                 localVisible();
+                win = findWindow(wv.getContext());
+                if (win != null) wv.getLocationInWindow(wvLoc);
                 wv.evaluateJavascript(PREP, new ValueCallback<String>() {
                     @Override
                     public void onReceiveValue(String value) {
@@ -138,7 +146,7 @@ public final class PageShot {
             if (raw == null) return false;
             String s = raw.replace("\"", "").replace("\\", "").trim();
             String[] p = s.split("\\|");
-            if (p.length < 10) return false;
+            if (p.length < 9) return false;
             try {
                 cssW = Integer.parseInt(p[0].trim());
                 cssScrollH = Integer.parseInt(p[1].trim());
@@ -166,13 +174,11 @@ public final class PageShot {
                 boolean jsScroll = cssScrollH > cssClientH + 8 && !innerScroller;
                 if (jsScroll) {
                     mode = MODE_JS;
-                    step = cssClientH;
                     steps = (int) Math.ceil(cssScrollH / (double) cssClientH);
                     outH = (int) Math.round(Math.min(cssScrollH, (double) cssClientH * steps) * density);
                 } else if (wv.getHeight() > vis.height() + 8) {
                     mode = MODE_NATIVE;
-                    step = vis.height();
-                    steps = (int) Math.ceil(wv.getHeight() / (double) step);
+                    steps = (int) Math.ceil(wv.getHeight() / (double) vis.height());
                     outH = wv.getHeight();
                 } else {
                     mode = MODE_SINGLE;
@@ -212,7 +218,12 @@ public final class PageShot {
                     done(false, "找不到可滚动的外层容器");
                     return;
                 }
-                toast(ctx, "正在生成整页长图（" + steps + " 屏）…");
+                toast(ctx, "正在生成整页长图…");
+                if (mode == MODE_JS) {
+                    // 新路线：整页撑开一次画完，不滚动、不拼接（滚动拼接会重复/接缝）
+                    expandShot();
+                    return;
+                }
                 main.postDelayed(this, SETTLE_MS);
             } catch (Throwable t) {
                 done(false, "创建画布失败：" + t);
@@ -220,7 +231,8 @@ public final class PageShot {
         }
 
         private String modeOf() {
-            return mode == MODE_JS ? "js" : (mode == MODE_NATIVE ? "native" : "single");
+            return mode == MODE_JS ? "js" : (mode == MODE_NATIVE ? "native"
+                    : (mode == MODE_EXPAND ? "expand" : "single"));
         }
 
         /** 每屏：滚动 → 等待渲染 → 画一帧 → 贴到总图。 */
@@ -252,9 +264,20 @@ public final class PageShot {
                             @Override
                             public void onReceiveValue(String value) {
                                 int actual = toInt(value);
+                                // 页面有自己的滚动动画/虚拟列表重建，scrollTo 后位置未必立刻到位。
+                                // 没到位就再等一轮重试，否则会拍到上一屏内容 → 图里出现重复段落。
+                                if (Math.abs(actual - wantY) > 2 && jsTries < 6) {
+                                    jsTries++;
+                                    HookEntry.log("PageShot js retry " + step + " want=" + wantY
+                                            + " actual=" + actual);
+                                    main.postDelayed(PageShot.Job.this, 260);
+                                    return;
+                                }
+                                jsTries = 0;
                                 HookEntry.log("PageShot js step " + step + " want=" + wantY
                                         + " actual=" + actual);
-                                grab(wantY, 0);
+                                // 用「实际」位置贴图：即使没滚到 want，也不会把内容贴错位置。
+                                grab(actual, 0);
                             }
                         });
             } catch (Throwable t) {
@@ -284,7 +307,7 @@ public final class PageShot {
         }
 
         private int stepPx() {
-            return Math.round(step * density);
+            return vis.height();
         }
 
         /**
@@ -293,64 +316,287 @@ public final class PageShot {
          * @param cssY   JS 模式下这一屏的内容起点（CSS px），0 表示用当前定位
          * @param nativeY 原生模式下累计滚动位移（设备 px）
          */
-        private void grab(int cssY, int nativeY) {
-            Bitmap frame = null;
+        private void grab(final int cssY, final int nativeY) {
+            final Bitmap frame;
             try {
                 frame = Bitmap.createBitmap(wv.getWidth(), wv.getHeight(), Bitmap.Config.ARGB_8888);
-                frame.eraseColor(0xFFFFFFFF);
-                wv.draw(new Canvas(frame));
-
-                Rect src;
-                if (mode == MODE_NATIVE || mode == MODE_SINGLE) {
-                    src = new Rect(vis);
-                } else {
-                    src = new Rect(
-                            Math.round(rectX * density), Math.round(rectY * density),
-                            Math.round((rectX + rectW) * density), Math.round((rectY + rectH) * density));
+            } catch (Throwable t) {
+                done(false, "创建帧失败：" + t);
+                return;
+            }
+            // WebView 是硬件加速渲染的，View.draw(Canvas) 拍不到内容（实测全白）。
+            // PixelCopy 没有 View 重载（只有 Surface/SurfaceView/Window），所以拍整个窗口再裁。
+            if (win != null && android.os.Build.VERSION.SDK_INT >= 26) {
+                final android.view.View decor = win.getDecorView();
+                final int w = decor.getWidth();
+                final int h = decor.getHeight();
+                if (w > 0 && h > 0) {
+                    final Bitmap shot = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    try {
+                        android.view.PixelCopy.request(win, new Rect(0, 0, w, h),
+                                shot, new android.view.PixelCopy.OnPixelCopyFinishedListener() {
+                                    @Override
+                                    public void onPixelCopyFinished(int result) {
+                                        if (result != android.view.PixelCopy.SUCCESS) {
+                                            HookEntry.log("PageShot PixelCopy result=" + result);
+                                            shot.recycle();
+                                            frame.recycle();
+                                            done(false, "抓屏失败（" + result + "）");
+                                            return;
+                                        }
+                                        paste(shot, frame, cssY, nativeY, true);
+                                    }
+                                }, main);
+                        return;
+                    } catch (Throwable t) {
+                        HookEntry.log("PageShot PixelCopy 异常，回退 draw(): " + t);
+                        shot.recycle();
+                    }
                 }
+            }
+            frame.eraseColor(0xFFFFFFFF);
+            try {
+                wv.draw(new Canvas(frame));
+            } catch (Throwable t) {
+                done(false, "绘制失败：" + t);
+                return;
+            }
+            paste(frame, cssY, nativeY);
+        }
+
+        /** JS 模式下内容是否已经全部覆盖（比按屏数算更可靠）。 */
+        private boolean fullyCovered() {
+            return mode == MODE_JS && coveredPx >= cssScrollH * density - 4;
+        }
+
+        /** 把一帧按可见区裁剪并贴进总图。 */
+        private void paste(Bitmap frame, int cssY, int nativeY) {
+            paste(frame, null, cssY, nativeY, false);
+        }
+
+        private void paste(Bitmap shot, Bitmap viewFrame, int cssY, int nativeY, boolean fromWindow) {
+            try {
+                // 每一帧都是「WebView 当前可见区域」的画面（JS 模式下页面内容已滚到 cssY），
+                // 所以裁剪区固定用 vis；切勿用 getBoundingClientRect() 的 rectH——
+                // 它是整页布局高度（若 rectY 为负，裁剪会一路向上跑，贴出来就是白的）。
+                Rect src = new Rect(vis);
+                if (fromWindow && shot != null) src.offset(wvLoc[0], wvLoc[1]);
+                Bitmap frame = fromWindow ? shot : viewFrame;
                 if (!src.intersect(0, 0, frame.getWidth(), frame.getHeight())) {
                     done(false, "可见区域异常");
                     return;
                 }
 
-                int dstTop;
-                if (mode == MODE_JS) {
-                    dstTop = Math.round(cssY * density * scale);
-                } else {
-                    dstTop = Math.round(nativeY * scale);
+                int frameTop = (mode == MODE_JS) ? Math.round(cssY * density) : nativeY;
+                int srcH0 = src.height();
+                // 帧与帧之间必然有重叠（滚动量不足一屏、或页面有粘性行）：
+                // 把已经贴过的顶部裁掉，既消掉重复段落，也消掉接缝处的白线。
+                if (frameTop < coveredPx) {
+                    int cut = Math.min(srcH0 - 1, coveredPx - frameTop);
+                    if (cut > 0) {
+                        src.top += cut;
+                        srcH0 -= cut;
+                        frameTop += cut;
+                    }
                 }
-                int dstH = Math.round(src.height() * scale);
+                if (srcH0 <= 2) {
+                    HookEntry.log("PageShot skip duplicate frame at " + frameTop);
+                    step++;
+                    if (step >= steps || fullyCovered()) finish();
+                    else main.postDelayed(this, 120);
+                    return;
+                }
+                int dstTop = Math.round(frameTop * scale);
                 if (dstTop >= outH) {
                     finish();
                     return;
                 }
+                int dstH = Math.round(srcH0 * scale);
                 int dstBottom = Math.min(outH, dstTop + dstH);
                 Canvas c = new Canvas(out);
                 c.drawBitmap(frame, src, new Rect(0, dstTop, outW, dstBottom),
                         new Paint(Paint.FILTER_BITMAP_FLAG));
+                coveredPx = Math.max(coveredPx, frameTop + srcH0);
                 step++;
-                if (step >= steps) finish();
+                if (step >= steps || fullyCovered()) finish();
                 else main.postDelayed(this, SETTLE_MS);
             } catch (Throwable t) {
                 done(false, "绘制失败：" + t);
             } finally {
-                if (frame != null) frame.recycle();
+                if (shot != null && shot != viewFrame) shot.recycle();
+                if (viewFrame != null) viewFrame.recycle();
             }
         }
 
+        /** 从 WebView 的 Context 往上找 Activity/Window（PixelCopy 只接受 Window）。 */
+        private static android.view.Window findWindow(android.content.Context c) {
+            android.content.Context cur = c;
+            while (cur != null) {
+                if (cur instanceof android.app.Activity) return ((android.app.Activity) cur).getWindow();
+                if (cur instanceof android.content.ContextWrapper) {
+                    android.content.Context next = ((android.content.ContextWrapper) cur).getBaseContext();
+                    if (next == cur) break;
+                    cur = next;
+                } else {
+                    break;
+                }
+            }
+            // 兜底：用 WebView 的 rootView 反查（PopupWindow 等场景拿不到 Activity）
+            return null;
+        }
+
         private void finish() {
+            saveBitmap(out);
+        }
+
+        /** 统一落盘：PNG → 相册。expand 路径与拼接路径共用。 */
+        private void saveBitmap(Bitmap bmp) {
             try {
+                if (bmp == null) {
+                    done(false, "没有可保存的图像");
+                    return;
+                }
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(256 * 1024);
-                out.compress(Bitmap.CompressFormat.PNG, 100, bos);
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, bos);
                 byte[] data = bos.toByteArray();
                 String name = "zybclean_" + android.text.format.DateFormat.format(
                         "yyyyMMdd_HHmmss", System.currentTimeMillis()) + ".png";
                 String path = H5Bridge.saveBytes(ctx, name, "image/png", data);
                 HookEntry.log("PageShot saved: mode=" + modeOf() + " steps=" + step
+                        + " " + bmp.getWidth() + "x" + bmp.getHeight()
                         + " size=" + data.length + " B path=" + path);
+                if (bmp != out) bmp.recycle();
                 done(true, path == null || path.length() == 0 ? "保存失败" : "长图已保存到相册");
             } catch (Throwable t) {
                 done(false, "保存失败：" + t);
+            }
+        }
+
+        /* ---------------- 新路线：整页撑开一次画完 ---------------- */
+
+        /**
+         * 把 WebView 的高度临时改成整页高度、切软件层，等布局稳定后一次 {@code draw()} 拿全图。
+         * 不滚动 → 没有接缝、没有重复段落；失败则回退到旧的逐屏拼接。
+         */
+        private void expandShot() {
+            int oldH;
+            try {
+                android.view.ViewGroup.LayoutParams lp = wv.getLayoutParams();
+                if (lp == null) {
+                    stitchFallback("no layout params");
+                    return;
+                }
+                oldH = lp.height;
+                final int keepH = oldH;
+                int targetH = Math.round(cssScrollH * density) + 4;
+                if (targetH > MAX_EXPAND_H) targetH = MAX_EXPAND_H;
+                if (targetH <= vis.height()) {
+                    stitchFallback("target too short " + targetH);
+                    return;
+                }
+                if (out != null) {
+                    out.recycle();
+                    out = null;
+                }
+                lp.height = targetH;
+                wv.setLayoutParams(lp);
+                wv.requestLayout();
+                HookEntry.log("PageShot expand: " + wv.getWidth() + "x" + targetH
+                        + " (oldH=" + keepH + ")");
+                main.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            wv.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+                        } catch (Throwable ignored) {
+                        }
+                        main.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                drawExpanded(keepH);
+                            }
+                        }, 900L);
+                    }
+                }, 1200L);
+            } catch (Throwable t) {
+                stitchFallback("expand error " + t);
+            }
+        }
+
+        private void drawExpanded(int oldH) {
+            Bitmap bmp = null;
+            try {
+                int h = Math.min(wv.getHeight(), MAX_EXPAND_H);
+                if (h <= 0) {
+                    restoreHeight(oldH);
+                    stitchFallback("expanded height 0");
+                    return;
+                }
+                bmp = Bitmap.createBitmap(wv.getWidth(), h, Bitmap.Config.ARGB_8888);
+                bmp.eraseColor(0xFFFFFFFF);
+                wv.draw(new Canvas(bmp));
+                int ink = inkPixels(bmp);
+                restoreHeight(oldH);
+                HookEntry.log("PageShot expand ink=" + ink + " size=" + bmp.getWidth() + "x" + h);
+                if (ink < 300) {
+                    bmp.recycle();
+                    stitchFallback("blank ink=" + ink);
+                    return;
+                }
+                mode = MODE_EXPAND;
+                saveBitmap(bmp);
+            } catch (Throwable t) {
+                if (bmp != null) bmp.recycle();
+                restoreHeight(oldH);
+                stitchFallback("draw error " + t);
+            }
+        }
+
+        private void restoreHeight(int oldH) {
+            try {
+                wv.setLayerType(View.LAYER_TYPE_NONE, null);
+            } catch (Throwable ignored) {
+            }
+            try {
+                android.view.ViewGroup.LayoutParams lp = wv.getLayoutParams();
+                if (lp != null) {
+                    lp.height = oldH;
+                    wv.setLayoutParams(lp);
+                    wv.requestLayout();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        private void stitchFallback(String why) {
+            HookEntry.log("PageShot expand failed -> stitch: " + why);
+            mode = MODE_JS;
+            step = 0;
+            coveredPx = 0;
+            try {
+                wv.evaluateJavascript(
+                        "(function(){try{window.scrollTo(0,0);}catch(e){}})()", null);
+            } catch (Throwable ignored) {
+            }
+            main.postDelayed(this, 400L);
+        }
+
+        /** 抽样统计非白像素，用来判定“撑开后是不是白图”。 */
+        private static int inkPixels(Bitmap b) {
+            try {
+                int w = b.getWidth();
+                int h = b.getHeight();
+                int sx = Math.max(1, w / 120);
+                int sy = Math.max(1, h / 300);
+                int ink = 0;
+                for (int y = 0; y < h; y += sy) {
+                    for (int x = 0; x < w; x += sx) {
+                        if ((b.getPixel(x, y) & 0x00FFFFFF) != 0x00FFFFFF) ink++;
+                    }
+                }
+                return ink;
+            } catch (Throwable t) {
+                return 0;
             }
         }
 
@@ -418,6 +664,10 @@ public final class PageShot {
     private static final String PREP =
             "(function(){try{"
                     + "if(window.__zybShot)return window.__zybShot.info();"
+                    + "window.__zybCapture=1;"
+                    + "try{var st=document.createElement('style');"
+                    + "st.textContent='html,body,*{scroll-behavior:auto!important}';"
+                    + "(document.head||document.documentElement).appendChild(st);}catch(e){}"
                     + "var hidden=[];"
                     + "function hide(el){try{hidden.push(el);"
                     + "el.style.setProperty('display','none','important');}catch(e){}}"
@@ -469,14 +719,15 @@ public final class PageShot {
                     + "Math.round(r.left),Math.round(r.top),"
                     + "Math.round(r.width),Math.round(r.height),inner?1:0].join('|');},"
                     + "scrollTo:function(y){try{if(inner){target.scrollTop=y;}"
-                    + "else{window.scrollTo(0,y);"
+                    + "else{try{window.scrollTo({top:y,left:0,behavior:'instant'});}"
+                    + "catch(e2){window.scrollTo(0,y);}"
                     + "if(document.scrollingElement)document.scrollingElement.scrollTop=y;}}catch(e){}"
                     + "return Math.round(inner?target.scrollTop:(window.pageYOffset||0));}};"
                     + "return window.__zybShot.info();"
                     + "}catch(e){return '';}})()";
 
     private static final String RESTORE =
-            "(function(){try{var s=window.__zybShot;if(!s){window.__zybStop=0;return;}"
+            "(function(){try{var s=window.__zybShot;window.__zybCapture=0;if(!s){window.__zybStop=0;return;}"
                     + "for(var i=0;i<s.hidden.length;i++){"
                     + "try{s.hidden[i].style.removeProperty('display');}catch(e){}}"
                     + "try{if(s.inner){s.target.scrollTop=0;}else{window.scrollTo(0,0);}}catch(e){}"

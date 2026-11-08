@@ -192,3 +192,25 @@ HookEntry（仅 com.zuoyebang.knowledge）
 6. **落盘**：`Bitmap.compress(PNG)` → 复用已有的 MediaStore/MediaScanner/私有目录三级回落。
 7. **线程**：JS 桥回调在 JavaBridge 线程，`WebView.draw` 必须 post 到主线程；用静态 `sBusy` 防重入。
 8. **JS 也要 node --check**：把 Java 里拼的 JS 常量反射 dump 成文件再校验，能提前抓住括号不配对。
+
+
+## 十二、长截图：别滚动拼接，撑开一次画完
+
+**踩过的三条死路**：
+1. `WebView.draw(Canvas)` 直接拍 → 硬件加速下**全白**（内容在 RenderThread 层）；
+2. `PixelCopy` 拍窗口能拍到内容，但**逐屏滚动拼接**会出接缝白线、重复段落、末屏截断（Chromium 异步栅格化 + 页面自身平滑滚动）；
+3. `getBoundingClientRect()` 是**整页布局盒**（可能是负坐标、高度等于整页），不能当可视裁剪区。
+
+**正解（expand）**：
+- 记下 `LayoutParams.height` → 改成 `round(页面总高 * density)`（封顶 14000px）→ `requestLayout`；
+- 等 1.2s 布局 → `setLayerType(LAYER_TYPE_SOFTWARE, null)` 再等 0.9s（关键：软件渲染才能真正 draw 出内容）→ `wv.draw(canvas)` 一次画完；
+- 抽样统计非白像素判断是否空白（`ink<300` 视为失败）→ 失败回退拼接；
+- 无论成败都要**恢复 layerType 与 LayoutParams**，否则页面布局被永久改坏。
+
+**注意**：`step` 这类变量不要一鱼两吃（既当计数器又当步长），否则 `if (step >= steps)` 一进门就结束，保存一张空白图。
+
+**加载卡顿**通常不是 hook 本身，而是注入的 DOM 扫描：
+- `MutationObserver` 必须 debounce（≥400ms），否则首屏渲染期跑几千次全量遍历；
+- 扫描限元素数（2500）、跳过子节点多的容器、别用 `innerText`（强制同步布局）；
+- 定时扫描 3s 起，`document.hidden` 时直接 return；
+- 截图/重活期间用全局标记让扫描让路。

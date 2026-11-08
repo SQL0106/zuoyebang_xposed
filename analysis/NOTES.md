@@ -675,3 +675,55 @@ AdBlocker → FeedKiller → ActivityBlocker → DialogKiller → FloatKiller �
 - `./build.sh` → BUILD_OK，`zybclean.apk` **49,776 B**，`1.2.2 (6)`，签名不变。
 - JS 三份 `node --check` 全过：WebKiller.JS 7,389 B、PageShot.PREP **2,745 B**、RESTORE 300 B。
 - 待真机验证：滚动模式判定、拼接是否有重复/空白、视频讲解与双十一 banner 是否已消失。
+
+
+## 28. 2026-11-08 —— 长截图全白的两层原因（PixelCopy / step 变量）
+
+### 全白 A：`WebView.draw(Canvas)` 在硬件加速下拍不到内容
+- 现象：保存出来的图整张白，`size` 只有 66 KB。
+- 原因：硬件加速的 WebView 内容在 RenderThread 的栅格化层里，`View.draw()` 走不到。
+- 解法：**拍窗口再裁**。`PixelCopy` 没有 View 重载（只有 `Surface`/`SurfaceView`/`Window`），所以：
+  从 `wv.getContext()` 沿 `ContextWrapper` 链找 `Activity` → `getWindow()`；
+  `wv.getLocationInWindow(loc)`；`PixelCopy.request(window, new Rect(0,0,decorW,decorH), shot, listener, main)`；
+  回调里把裁剪矩形 `offset(loc[0], loc[1])` 后贴进总图。无 Window / API<26 时回退 `wv.draw()`。
+
+### 全白 B：`step` 变量一鱼两吃
+- 现象：日志 `PageShot start: … steps=5` 紧接着 `saved: steps=636`，耗时约 1 秒。
+- 原因：`step` 既是「屏计数器」又是「步长」，`begin()` 里残留 `step = cssClientH` → `run()` 第一句 `if (step >= steps) finish()` 直接成立，**一帧没拍就保存了空白画布**。
+- 解法：`step` 只当屏序号（初值 0），步长单独用 `stepPx()`。
+
+### 裁剪矩形
+`getBoundingClientRect()` 给的是**整页布局盒**（`rectH=2648`、`rectY` 甚至 `-2011`），不能用来裁剪可视区；
+裁剪永远用 `getGlobalVisibleRect` 减 `getLocationOnScreen` 得到的 WebView 本地可见矩形 `vis`。
+
+## 29. 2026-11-08 —— 长截图最终方案（expand：撑开一次画完）+ 加载卡顿治理
+
+用户原话：「还是很糟糕」「依旧很糟糕，能不能换个路线」「然后还要解决卡顿问题，容易在加载时卡顿一会儿。」
+
+### 为什么放弃滚动拼接
+逐屏滚 + 拼接必然出现：接缝白线（Chromium 异步栅格化）、同一段内容重复（页面自身滚动/虚拟列表重建）、末屏截断。
+`scrollTo` 的返回值也不可信（H5 有自己的平滑滚动/吸顶逻辑）。
+
+### expand 方案（`PageShot.expandShot()`）
+1. 取 `wv.getLayoutParams()`，记录 `oldH`；
+2. `lp.height = round(cssScrollH * density) + 4`，封顶 `MAX_EXPAND_H = 14000`，`setLayoutParams` + `requestLayout`；
+3. 等 **1200ms** 让 WebView 重新布局；
+4. `wv.setLayerType(LAYER_TYPE_SOFTWARE, null)`，再等 **900ms**（软件渲染接管后才能真正 draw 到内容）；
+5. 建 `ARGB_8888` 白底位图（`wv.getWidth() x min(getHeight(), 14000)`) → `wv.draw(canvas)`；
+6. `inkPixels()` 抽样统计非白像素（每 `w/120`、`h/300` 一点，`(px & 0xFFFFFF) != 0xFFFFFF` 计数）；
+7. `restoreHeight(oldH)`（layerType 还原 `NONE` + LayoutParams 复原 + `requestLayout`）；
+8. `ink < 300` → 判定空白，`stitchFallback("blank ink=…")` 回退旧拼接；否则 `mode = MODE_EXPAND` 直接 `saveBitmap(bmp)`。
+
+日志：`PageShot expand: WxH (oldH=…)` / `PageShot expand ink=… size=…` / `PageShot saved: mode=expand …`。
+真机结果：一次成功，无接缝无重复。
+
+### 加载卡顿的三道收法（`WebKiller` JS + `AnswerPageKiller`）
+1. **MutationObserver 去抖 450ms**：原来每次 DOM 变动都同步跑全量 `loop()`（遍历 `div,span,li,a,button,p,section,em,strong` + 重写 innerText），H5 首屏渲染期触发成百上千次 → 卡死。
+   ```js
+   var pend=0;
+   new MutationObserver(function(){if(pend)return;pend=1;setTimeout(function(){pend=0;loop();},450);})
+   ```
+2. **扫描限量 + 少碰布局**：`scanKill()` 元素上限 2500、跳过 `childElementCount>4` 的大容器；`gate()` 用 `textContent` 代替会强制同步布局的 `innerText`。
+3. **定时器降频 + 后台停摆**：`setInterval(loop,1500)` → `setInterval(function(){if(document.hidden)return;loop();},3000)`；
+   `AnswerPageKiller.DELAYS` 从 5 个（500/1200/2800/6000/12000）减到 3 个（600/2000/6000）；
+   截图期间 `window.__zybCapture=1`，`loop()` 直接 return，避免截图与扫描互抢主线程。
