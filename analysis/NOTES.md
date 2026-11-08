@@ -797,3 +797,75 @@ AnswerPageKiller: probe SecureListView w=1280 h=2491 top=309 bottom=2800
 AnswerPageKiller: banner RelativeLayout h=238 top=2562
 AnswerPageKiller: hid 1 bottom banner(s)
 ```
+
+## 31. 2026-11-08 —— 1.3.0 两条硬骨头：浮窗「拖着页面一起滚」+ 广告卡反弹
+
+### 31.1 浮窗拖动时页面跟着滚
+
+现象：拖 `#zyb-bar`，浮窗自己跟手，**页面也一起滚**。上一版已经加了 `touch-action:none`、
+`setPointerCapture`、按控件尺寸 clamp，仍然发生。
+
+原因：`touch-action` 只对**页面内部滚动**有效，而且要求「按下那一刻」就禁止默认行为；
+等位移超过 6px 再 `preventDefault()`，滚动早已开始。更麻烦的是答案页/首页的滚动有时根本不在
+WebView 里，而在 WebView 外面的原生滚动容器（NestedScrollView、RecyclerView、`SwapBackLayout` 侧滑），
+JS 怎么调 CSS 都拦不住。
+
+三层修法（缺一层都能复现）：
+
+1. `pointerdown` 里立刻 `if(e.cancelable) e.preventDefault();` —— 滚动不启动；
+2. 拖动期间在 **window** 上挂 `touchmove`，`{capture:true, passive:false}` 且 `preventDefault()`，
+   `pointerup/pointercancel` 立刻摘掉 —— 页面内部滚动也吃掉；
+3. Java 桥新增 `zybcleanHost.lockTouch(boolean)` → `H5Bridge.lockTouch`：主线程上对 WebView 的
+   **所有父级** `requestDisallowInterceptTouchEvent(lock)`，按下锁、松手解锁 —— 原生父级不再抢手势。
+
+附带两条：
+- `bar.style.setProperty('touch-action','none','important')` 顶掉页面可能存在的 `!important` 覆盖；
+- 手指一动就 `clearTimeout(__zybHold)`：否则「按住 → 想一下 → 再拖」，700ms 长按隐藏先把浮窗藏了，
+  用户体感就是「拖不动」。
+
+自检：`.agent/snips/drag-smoke.js` 扩到 16 项（lockTouch 锁/解锁、touchmove passive:false、
+preventDefault 命中、松手摘监听、四边 clamp、异 pointerId 忽略）。
+
+### 31.2 广告卡反弹：类名优先，稳定文案兜底
+
+1.3.0 曾按「禁止文字匹配」把字面量规则全删，`绑定作业帮APP账号` 推广卡一并消失；
+同时首页清理从 5 趟（600→12000ms）砍到 2 趟（600/2500ms），**异步加载**的广告卡没人管 → 反弹。
+
+用户 2026-11-08 定的口径（以后照这个来）：
+> 「对于你认为不会变的文字，可以根据文字匹配，但是如果有专门的名称，还是匹配名称。」
+
+即：**有专用类名/资源名 → 一律按名称；确实不会变的老文案（如「绑定作业帮APP账号」）可以按文字，
+但必须收敛在固定容器里，不能拿文案当主要判据。**
+
+dex 类表里一眼能看出的广告专用类（`analysis/classes.txt`）：
+| 类 | 含义 | 处理 |
+|---|---|---|
+| `newhomepage.a_home.holder.AD*Holder`（ADNewBaseHolder / ADInnerNativeBaseHolder / ADNativeHolder12680 …） | 首页信息流广告 | 类名**前缀**匹配（后缀是版本号，会变），GONE itemView |
+| `user_tab.holder.VipAbCardViewHolder` | 我的页顶部会员/广告横滑卡 | GONE itemView |
+| `adx.widget.XMarqueeView`（adx＝广告交易） | 广告卡里的跑马灯**一行** | 藏它爹（整张卡） |
+| `user_tab.jgw.UserJGWBannerView` | 我的页推广位 | 整块 GONE |
+
+实现要点（`AdCardKiller`）：
+- **只 hook 一次** `RecyclerView$ViewHolder` 构造器，构造完做一次类名前缀比较；
+  不管广告卡是同步还是 5 秒后才懒加载，卡一创建就被压，**不依赖定时全树扫描**。
+- `XMarqueeView` 在构造期还没有 parent → 挂 `OnAttachStateChangeListener`，attach 时再取 parent 藏。
+- 防「再反弹」：命中的 itemView 额外挂 attach + layout 监听，谁把它设回 VISIBLE 就压回 GONE
+  （RecyclerView 复用时适配器 bind 里设 VISIBLE 是常见来源）。
+- 成本：每个 ViewHolder 一次字符串比较，无定时器、无全树遍历、不读文字（稳定文案那一条除外）。
+
+### 31.3 其它教训（这一轮踩过的）
+
+1. **断言「某段代码删了没」之前先读 git，不凭印象**。用户问「删除的代码你是不是删了」时，
+   要能立刻 `git show <commit> -- <file>` 给出证据；本次确实删了整条链路（`3733622`），
+   后来按 native id + 结构恢复（`a493717`）。
+2. **需求要按「控件在哪一层」区分**：问小帮是 **native** 底栏按钮（`0x7f090be3` 容器里、
+   除带 `0x7f0911f7` 的蓝按钮那支之外，含 TextView 的子项一律 GONE），搜索页才是 H5。
+   把 native 需求当 H5 做，白改一轮。
+3. **导航条（结果1/2/3）永远不碰**。`NAVSEL='#pageNav,[class*="navWrap"],[class*="navBox"],[class*="navItem"],nav,ul,li'`
+   在候选与待隐藏父节点上各查一次；`repairNav()` 只还原 display/visibility/opacity。
+4. **CI 产物**：
+   - APK 绝不能进版本库（`zybclean-*.apk` 加 .gitignore），否则 artifact 里会混进历史版本；
+   - 上传前 `rm -f zybclean-*.apk`，上传路径用从 `AndroidManifest.xml` 读出的 `VER`，不用通配；
+   - `actions/upload-artifact@v7` 用 `archive: false` → 直接出 APK，不再套 zip（此时 artifact 名＝文件名）；
+   - action 全线升级到 node24 版本（checkout@v7 / cache@v6 / setup-java@v6 / upload-artifact@v7 /
+     gh-release@v3），runner 固定 `ubuntu-24.04`（`ubuntu-latest` 2026-10 起要迁 26，别赌镜像）。
