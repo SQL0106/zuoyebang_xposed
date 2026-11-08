@@ -29,7 +29,7 @@ public final class Snap {
     private static final String TRIGGER = "/data/data/com.zuoyebang.knowledge/files/.zyb_snap";
     private static final String OUT = "/data/data/com.zuoyebang.knowledge/files/.zyb_snap.txt";
 
-    private static final int MAX_LINES = 400;
+    private static final int MAX_LINES = 3000;
     private static final int MAX_OVERLAYS = 40;
 
     private static volatile Object sActivity;

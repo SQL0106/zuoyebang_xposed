@@ -30,7 +30,27 @@ APKSIGNER="$(pick apksigner "$BT/apksigner" || true)"
 [ -n "$APKSIGNER" ] || { echo "apksigner 未找到"; exit 1; }
 
 rm -rf build out.apk
-mkdir -p build/classes build/stubs build/dex build/pkg build/jarcheck
+mkdir -p build/classes build/stubs build/dex build/pkg build/jarcheck build/flags
+
+# DEBUG=1 打带探针的 debug 包；默认打正式包
+DEBUG="${DEBUG:-0}"
+VER="$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' AndroidManifest.xml | head -1)"
+[ -n "$VER" ] || { echo "读不到 versionName"; exit 1; }
+if [ "$DEBUG" = "1" ]; then
+  OUT="zybclean-${VER}-universal-debug.apk"
+else
+  OUT="zybclean-${VER}-universal.apk"
+fi
+
+# BuildFlags.PROBES：正式包编 false 的源文件；debug 包编一份 sed 过的副本（源文件不动）
+FLAGS_SRC="src/io/github/sql0106/zybclean/BuildFlags.java"
+FLAGS_USE="$FLAGS_SRC"
+if [ "$DEBUG" = "1" ]; then
+  mkdir -p build/flags/io/github/sql0106/zybclean
+  sed 's/PROBES = false/PROBES = true/' "$FLAGS_SRC" > build/flags/io/github/sql0106/zybclean/BuildFlags.java
+  FLAGS_USE="build/flags/io/github/sql0106/zybclean/BuildFlags.java"
+  echo "debug build: PROBES=true"
+fi
 
 # 冒烟清单：用来验证 android.jar 能不能被 aapt 真正解析
 # 注意：Debian 的 aapt(1) 只认文件名恰为 AndroidManifest.xml 的清单，随便取名会报
@@ -78,7 +98,8 @@ echo "apksigner=$APKSIGNER"
 # 1. 模块源码（libxposed API 102 仅编译期依赖，框架运行期提供）
 API_JAR="libs/libxposed-api-102.jar"
 [ -f "$API_JAR" ] || { echo "缺少 $API_JAR"; exit 1; }
-javac --release 8 -nowarn -d build/classes -cp "$API_JAR:$JAR" $(find src -name '*.java')
+javac --release 8 -nowarn -d build/classes -cp "$API_JAR:$JAR" \
+    $(find src -name '*.java' ! -name 'BuildFlags.java') $FLAGS_USE
 
 # 2. dex
 "${D8_CMD[@]}" --min-api 24 --release --lib "$JAR" --lib "$API_JAR" \
@@ -94,7 +115,6 @@ cp -r module/META-INF build/pkg/
 
 # 6. 对齐 + 签名
 "$ZIPALIGN" -f -p 4 build/base.apk build/aligned.apk
-
 KS="$PWD/zybclean.keystore"
 if [ ! -f "$KS" ]; then
   keytool -genkeypair -keystore "$KS" -alias zybclean -keyalg RSA -keysize 2048 \
@@ -105,8 +125,9 @@ fi
 
 "$APKSIGNER" sign --ks "$KS" --ks-pass pass:zybclean --key-pass pass:zybclean \
     --v1-signing-enabled true --v2-signing-enabled true \
-    --out zybclean.apk build/aligned.apk
-"$APKSIGNER" verify --print-certs zybclean.apk | head -3
+    --out "$OUT" build/aligned.apk
+"$APKSIGNER" verify --print-certs "$OUT" | head -3
 
-ls -l zybclean.apk
+[ "$DEBUG" = "1" ] || cp -f "$OUT" zybclean.apk
+ls -l "$OUT"
 echo BUILD_OK

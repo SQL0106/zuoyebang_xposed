@@ -76,12 +76,13 @@ jobs:
           aapt package -f -M "$RUNNER_TEMP/jarcheck/AndroidManifest.xml" -I "$jar" -F "$RUNNER_TEMP/jarcheck/smoke.apk"
           echo SMOKE_OK
 
-      - name: 编译
+      - name: 编译（正式包 + debug 包）
         shell: bash
         run: |
           set -o pipefail
           chmod +x build.sh
           ./build.sh 2>&1 | tee build.log
+          DEBUG=1 ./build.sh 2>&1 | tee build-debug.log
 
       - name: 编译信息
         if: always()
@@ -91,7 +92,7 @@ jobs:
             echo "== java"; java -version 2>&1
             echo "== sdk"; echo "$SDK_DIR"; ls "$SDK_DIR/platforms" "$SDK_DIR/build-tools" 2>&1
             echo "== tools"; aapt version 2>&1 | head -2; apksigner --version 2>&1 | head -2
-            echo "== 产物"; ls -l zybclean.apk 2>&1
+            echo "== 产物"; ls -l zybclean-*.apk zybclean.apk 2>&1
             echo "== build 目录"; find build -maxdepth 2 2>/dev/null | head -50
           } > build-info.txt || true
           cat build-info.txt
@@ -113,8 +114,10 @@ jobs:
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: zybclean-apk
-          path: zybclean.apk
+          name: zybclean-apks
+          path: |
+            zybclean-*-universal.apk
+            zybclean-*-universal-debug.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -145,5 +148,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: zybclean.apk
+          files: |
+            zybclean-*-universal.apk
+            zybclean-*-universal-debug.apk
           generate_release_notes: true

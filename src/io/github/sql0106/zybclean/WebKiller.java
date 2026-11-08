@@ -32,6 +32,8 @@ public class WebKiller {
 
     private static final List<Object> WEBVIEWS = new ArrayList<Object>();
     private static final WeakHashMap<Object, Boolean> BRIDGED = new WeakHashMap<Object, Boolean>();
+    /** 已经挂过长按监听的原生 View（底部蓝色按钮），避免重复挂。 */
+    private static final WeakHashMap<Object, Boolean> BOUND_NATIVE = new WeakHashMap<Object, Boolean>();
 
     /** 注入脚本：幂等，重复注入无副作用。 */
     private static final String JS = buildJs();
@@ -77,7 +79,11 @@ public class WebKiller {
             + "if(!t||t.length>30)continue;"
             + "var r;try{r=el.getBoundingClientRect();}catch(e3){continue;}"
             + "var z=t.replace(/\\s/g,'');"
-            + "if((AI.test(z)||z==='问小帮')&&r.height<130)hide(el.closest('li')||el.parentElement||el);"
+            /* 顶部结果选项卡（#pageNav / navWrap / navBox / navItem_）里也有“AI解题”格子，
+               藏它会连带把相邻的“结果N”整格藏掉。导航区内一律跳过。 */
+            + "if((AI.test(z)||z==='问小帮')&&r.height<130){"
+            + "var nav=null;try{nav=el.closest('#pageNav,[class*=\"navWrap\"],[class*=\"navBox\"],[class*=\"navItem_\"]');}catch(e4){}"
+            + "if(!nav)hide(el.closest('li')||el.parentElement||el);}"
             + "if(t.indexOf('讲解')>=0){var p=el;for(var d=0;d<8&&p;d++){"
             + "var cs;try{cs=getComputedStyle(p);}catch(e2){break;}"
             + "if(cs&&(cs.position==='fixed'||cs.position==='sticky')){hide(p);break;}p=p.parentElement;}}"
@@ -171,22 +177,61 @@ public class WebKiller {
             + "function mkBar(){"
             + "if(document.getElementById('zyb-bar')||!document.body)return;"
             + "var bar=document.createElement('div');bar.id='zyb-bar';"
-            + "bar.style.cssText='position:fixed;right:10px;bottom:140px;z-index:2147483647;"
-            + "display:flex;flex-direction:column;gap:8px;';"
+            /* 位置：可拖动，拖动后记在 localStorage；换页重新注入时沿用上次位置。 */
+            + "var bw=86,bh=200,lx=window.innerWidth-bw-10,ly=window.innerHeight-140-bh;"
+            + "try{var ps=localStorage.getItem('zyb_bar_pos');if(ps){var pa=ps.split(',');lx=parseFloat(pa[0]);ly=parseFloat(pa[1]);}}catch(e0){}"
+            + "if(!(lx>=0&&lx<window.innerWidth-40))lx=window.innerWidth-bw-10;"
+            + "if(!(ly>=0&&ly<window.innerHeight-40))ly=window.innerHeight-140-bh;"
+            + "bar.style.cssText='position:fixed;left:'+Math.round(lx)+'px;top:'+Math.round(ly)+'px;"
+            + "z-index:2147483647;display:flex;flex-direction:column;gap:8px;';"
+            + "bar.style.opacity=String(window.__zybBarOp||1);"
             + "function mk(txt,color,fn){var b=document.createElement('div');b.textContent=txt;"
             + "b.style.cssText='padding:8px 12px;border-radius:16px;color:#fff;font-size:13px;"
             + "line-height:1;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.25);"
             + "background:'+color+';user-select:none;';"
-            + "b.addEventListener('click',function(e){e.stopPropagation();e.preventDefault();fn();},true);return b;}"
+            + "b.addEventListener('click',function(e){e.stopPropagation();e.preventDefault();"
+            /* 拖动结束会补发一次 click，用它拦住误触。 */
+            + "if(window.__zybBarMoved){window.__zybBarMoved=0;return;}fn();},true);return b;}"
+            + "function pt(e){var t=(e.touches&&e.touches[0])||e;return {x:t.clientX,y:t.clientY};}"
+            + "var px=0,py=0,ox=0,oy=0,drag=0;"
+            + "bar.addEventListener('touchstart',function(e){var p=pt(e);var r=bar.getBoundingClientRect();"
+            + "ox=r.left;oy=r.top;px=p.x;py=p.y;drag=0;window.__zybBarMoved=0;"
+            /* 长按 700ms 整条消失；本页内不再出现，换页/再拍一页重新注入时自然恢复。 */
+            + "clearTimeout(window.__zybHold);"
+            + "window.__zybHold=setTimeout(function(){if(!drag){window.__zybBarOp=0;bar.style.display='none';}},700);"
+            + "},true);"
+            + "bar.addEventListener('touchmove',function(e){var p=pt(e);var mx=p.x-px,my=p.y-py;"
+            + "if(!drag&&(Math.abs(mx)>6||Math.abs(my)>6)){drag=1;window.__zybBarMoved=1;clearTimeout(window.__zybHold);}"
+            + "if(!drag)return;e.preventDefault();"
+            + "bar.style.left=Math.round(Math.max(0,Math.min(window.innerWidth-30,ox+mx)))+'px';"
+            + "bar.style.top=Math.round(Math.max(0,Math.min(window.innerHeight-30,oy+my)))+'px';},true);"
+            + "bar.addEventListener('touchend',function(e){clearTimeout(window.__zybHold);"
+            + "if(drag){var r=bar.getBoundingClientRect();"
+            + "try{localStorage.setItem('zyb_bar_pos',Math.round(r.left)+','+Math.round(r.top));}catch(e1){}"
+            + "setTimeout(function(){window.__zybBarMoved=0;},150);}},true);"
             + "bar.appendChild(mk('复制内容','#3b82f6',copyAll));"
             + "bar.appendChild(mk('存题目','#f59e0b',function(){var h=H();"
             + "if(h&&h.shotPart){toast('生成中…');h.shotPart('q');}else{toast('桥未就绪');}}));"
             + "bar.appendChild(mk('存解答','#f59e0b',function(){var h=H();"
             + "if(h&&h.shotPart){toast('生成中…');h.shotPart('a');}else{toast('桥未就绪');}}));"
             + "bar.appendChild(mk('下载图片','#10b981',function(){downloadAll();}));"
+            /* 隐藏按钮：点一下变半透明（仍可拖），再点恢复。 */
+            + "var hideBtn=null;"
+            + "hideBtn=mk('隐藏','#64748b',function(){var v=(window.__zybBarOp||1)>0.5?0.35:1;"
+            + "window.__zybBarOp=v;bar.style.opacity=String(v);hideBtn.textContent=v>0.5?'隐藏':'显示';});"
+            + "if((window.__zybBarOp||1)<=0.5)hideBtn.textContent='显示';"
+            + "hideBtn.setAttribute('data-zybhide','1');"
+            + "bar.appendChild(hideBtn);"
             + "document.body.appendChild(bar);}"
+            /* 长按底部的原生蓝色按钮时，由 Java 侧调用这里把整条浮窗叫回来。 */
+            + "window.__zybBarShow=function(){window.__zybBarOp=1;"
+            + "var b=document.getElementById('zyb-bar');"
+            + "if(b){b.style.display='flex';b.style.opacity='1';"
+            + "var hb=b.querySelector('[data-zybhide]');if(hb)hb.textContent='隐藏';}"
+            + "return true;};"
             + "function gate(){var bar=document.getElementById('zyb-bar');if(!bar)return;"
-            + "if(window.__zybCapture){bar.style.display='none';return;}"
+            /* __zybBarOp===0 是长按消失，gate 不能把它拉回来。 */
+            + "if(window.__zybCapture||window.__zybBarOp===0){bar.style.display='none';return;}"
             + "var t=(document.body&&document.body.textContent)||'';"
             + "var ok=t.length>200&&/(答案|解析|解答|题目)/.test(t);"
             + "bar.style.display=ok?'flex':'none';}"
@@ -259,6 +304,8 @@ public class WebKiller {
                             XposedHelpers.callMethod(webView, "evaluateJavascript", JS, null);
                         } catch (Throwable ignored) {
                         }
+                        // 页面渲染完再绑：底部蓝色「再拍一页」是原生按钮，长按它唤回浮窗。
+                        bindNativeLongPress(webView);
                     }
                 }, Long.valueOf(delay));
             } catch (Throwable t) {
@@ -266,6 +313,88 @@ public class WebKiller {
                 return;
             }
         }
+    }
+
+    /**
+     * 底部蓝色「再拍一页」是原生 View（不是 H5），资源 id 不可用，只能按几何认：
+     * 贴底、宽 ≥ 40% 屏宽、高 60~320。给命中者挂长按 → 唤回网页里的悬浮工具条。
+     */
+    private static void bindNativeLongPress(Object webView) {
+        try {
+            Object root = XposedHelpers.callMethod(webView, "getRootView");
+            if (!(root instanceof android.view.View)) return;
+            android.view.View rv = (android.view.View) root;
+            int w = rv.getWidth();
+            int h = rv.getHeight();
+            if (w <= 0 || h <= 0) return;
+            int[] loc = new int[2];
+            rv.getLocationOnScreen(loc);
+            walkBind(rv, w, loc[1] + h, 0);
+        } catch (Throwable t) {
+            HookEntry.log("WebKiller bind native failed: " + t);
+        }
+    }
+
+    private static void walkBind(android.view.View v, int rootW, int rootBottom, int depth) {
+        if (!(v instanceof android.view.ViewGroup)) return;
+        if (depth > 40) return;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        int n = g.getChildCount();
+        for (int i = 0; i < n; i++) {
+            android.view.View c = g.getChildAt(i);
+            if (c == null || c instanceof android.webkit.WebView) continue;
+            if (c.getVisibility() != android.view.View.VISIBLE) continue;
+            int cw = c.getWidth();
+            int ch = c.getHeight();
+            if (cw > 0 && ch > 0) {
+                int[] loc = new int[2];
+                c.getLocationOnScreen(loc);
+                int bottom = loc[1] + ch;
+                boolean hit = cw >= rootW * 40 / 100
+                        && ch >= 60 && ch <= 320
+                        && bottom >= rootBottom - 90 && bottom <= rootBottom + 20;
+                if (hit) bindOne(c);
+            }
+            walkBind(c, rootW, rootBottom, depth + 1);
+        }
+    }
+
+    private static void bindOne(final android.view.View target) {
+        synchronized (BOUND_NATIVE) {
+            if (BOUND_NATIVE.containsKey(target)) return;
+            BOUND_NATIVE.put(target, Boolean.TRUE);
+        }
+        android.view.View.OnLongClickListener l = new android.view.View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(android.view.View v) {
+                revealBars();
+                return true;
+            }
+        };
+        try {
+            XposedHelpers.callMethod(target, "setOnLongClickListener", l);
+            XposedHelpers.callMethod(target, "setLongClickable", Boolean.TRUE);
+            HookEntry.log("WebKiller native long-press bound: "
+                    + target.getClass().getName() + " " + target.getWidth() + "x" + target.getHeight());
+        } catch (Throwable t) {
+            HookEntry.log("WebKiller native long-press bind failed: " + t);
+        }
+    }
+
+    /** 让所有已登记的 WebView 把悬浮工具条重新显示出来。 */
+    private static void revealBars() {
+        Object[] list;
+        synchronized (WEBVIEWS) {
+            list = WEBVIEWS.toArray();
+        }
+        for (Object o : list) {
+            try {
+                XposedHelpers.callMethod(o, "evaluateJavascript",
+                        "window.__zybBarShow&&window.__zybBarShow()", null);
+            } catch (Throwable ignored) {
+            }
+        }
+        HookEntry.log("WebKiller native long-press: reveal " + list.length + " webview(s)");
     }
 
     /** 给 WebView 挂上 java 桥对象（重复调用安全）。 */

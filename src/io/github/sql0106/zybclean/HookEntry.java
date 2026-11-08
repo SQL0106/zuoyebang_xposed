@@ -79,11 +79,14 @@ public class HookEntry extends XposedModule {
         } catch (Throwable t) {
             log("FastStart install failed", t);
         }
-        // 探针：需要现场取证时再打开（触发文件 .zyb_snap / .zyb_web，写在 App 私有目录）
-        // try { Probe.install(cl); } catch (Throwable t) { log("Probe install failed", t); }
-        // try { ViewDump.install(cl); } catch (Throwable t) { log("ViewDump install failed", t); }
-        // try { Snap.install(cl); } catch (Throwable t) { log("Snap install failed", t); }
-        try { WebEyes.install(cl); } catch (Throwable t) { log("WebEyes install failed", t); }
+        // 探针只在 debug 包里编译进去（触发文件写在 App 私有目录）。
+        // BuildFlags.PROBES 为 false 时整段被 javac 消除，正式包不含探针类。
+        if (BuildFlags.PROBES) {
+            try { Probe.install(cl); } catch (Throwable t) { log("Probe install failed", t); }
+            try { ViewDump.install(cl); } catch (Throwable t) { log("ViewDump install failed", t); }
+            try { Snap.install(cl); } catch (Throwable t) { log("Snap install failed", t); }
+            try { WebEyes.install(cl); } catch (Throwable t) { log("WebEyes install failed", t); }
+        }
         log("all hooks installed");
     }
 

@@ -28,7 +28,7 @@ public class WebEyes {
     private static final String TRIGGER = "/data/data/com.zuoyebang.knowledge/files/.zyb_web";
     private static final String OUT = "/data/data/com.zuoyebang.knowledge/files/.zyb_web.txt";
     private static final int MAX_WEBVIEWS = 6;
-    private static final int MAX_LINES = 1500;
+    private static final int MAX_LINES = 6000;
 
     private static final List<Object> WEBVIEWS = new ArrayList<Object>();
     private static ClassLoader sCl;
