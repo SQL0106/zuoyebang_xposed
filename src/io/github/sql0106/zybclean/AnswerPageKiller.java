@@ -135,6 +135,8 @@ public class AnswerPageKiller {
                     Object decor = XposedHelpers.callMethod(win, "getDecorView");
                     if (!(decor instanceof android.view.View)) return;
                     final android.view.View root = (android.view.View) decor;
+                    HookEntry.log("AnswerPageKiller: whole onResume, decor "
+                            + root.getWidth() + "x" + root.getHeight());
                     for (long delay : WHOLE_DELAYS) {
                         root.postDelayed(new Runnable() {
                             @Override
@@ -157,8 +159,14 @@ public class AnswerPageKiller {
         java.util.List<android.view.View> tvs = new java.util.ArrayList<android.view.View>();
         collectText(root, tvs, 0, 40);
         int hidden = 0;
+        int seen = 0;
         for (android.view.View tv : tvs) {
-            if (!ASK_TEXT.contentEquals(((android.widget.TextView) tv).getText())) continue;
+            CharSequence cs = ((android.widget.TextView) tv).getText();
+            String s = cs == null ? "" : cs.toString().trim();
+            if (s.length() == 0 || s.indexOf(ASK_TEXT) < 0) continue;
+            seen++;
+            logAncestry("ask-help text", tv, root);
+            if (!ASK_TEXT.contentEquals(s)) continue;
             if (tv.getVisibility() != android.view.View.VISIBLE) continue;
             android.view.View btn = buttonOfText(tv, root);
             if (btn == null || btn == root) continue;
@@ -168,8 +176,75 @@ public class AnswerPageKiller {
                 hidden++;
             }
         }
-        if (hidden > 0) {
-            HookEntry.log("AnswerPageKiller: hid " + hidden + " whole-page ask-help entry(ies)");
+        HookEntry.log("AnswerPageKiller: whole-page scan tv=" + tvs.size()
+                + " askText=" + seen + " hidden=" + hidden);
+        if (seen == 0) dumpBottomArea(root);
+    }
+
+    /** 已 dump 过的 decor（每个 Activity 只 dump 一遍，避免刷屏）。 */
+    private static final WeakHashMap<Object, Boolean> DUMPED = new WeakHashMap<Object, Boolean>();
+
+    /** 兜底诊断：没有找到「问小帮」文字节点时，把屏幕下 1/3 的结构打出来。 */
+    private static void dumpBottomArea(android.view.View root) {
+        if (DUMPED.put(root, Boolean.TRUE) != null) return;
+        try {
+            StringBuilder sb = new StringBuilder("AnswerPageKiller: bottom-area dump"
+                    + " (root " + root.getWidth() + "x" + root.getHeight() + ")");
+            int[] n = new int[]{0};
+            dumpBottom(root, sb, 0, root.getHeight() * 2 / 3, n);
+            sb.append("\n  ... ").append(n[0]).append(" nodes");
+            HookEntry.log(sb.toString());
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: bottom dump failed " + t);
+        }
+    }
+
+    private static void dumpBottom(android.view.View v, StringBuilder sb, int depth, int minY, int[] n) {
+        if (v == null || depth > 40 || n[0] > 80) return;
+        int[] xy = new int[2];
+        v.getLocationOnScreen(xy);
+        if (xy[1] + v.getHeight() >= minY && v.getVisibility() == android.view.View.VISIBLE) {
+            n[0]++;
+            sb.append("\n  ").append(depth).append(' ')
+                    .append(v.getClass().getSimpleName())
+                    .append(" id=0x").append(Integer.toHexString(v.getId()))
+                    .append(' ').append(v.getWidth()).append('x').append(v.getHeight())
+                    .append(" @").append(xy[0]).append(',').append(xy[1]);
+            if (v instanceof android.widget.TextView) {
+                CharSequence t = ((android.widget.TextView) v).getText();
+                if (t != null && t.length() > 0 && t.length() < 20) sb.append(" \"").append(t).append('"');
+            }
+        }
+        if (!(v instanceof android.view.ViewGroup)) return;
+        android.view.ViewGroup g = (android.view.ViewGroup) v;
+        for (int i = 0, c = g.getChildCount(); i < c; i++) {
+            dumpBottom(g.getChildAt(i), sb, depth + 1, minY, n);
+        }
+    }
+
+    /** 诊断用：把命中节点的祖先链（类名/id/坐标/可见性）打进 LSPosed 日志。 */
+    private static void logAncestry(String tag, android.view.View v, android.view.View root) {
+        try {
+            StringBuilder sb = new StringBuilder(tag).append(": ");
+            android.view.View p = v;
+            for (int i = 0; p != null && i < 8; i++) {
+                int[] xy = new int[2];
+                p.getLocationOnScreen(xy);
+                sb.append("\n  [").append(i).append("] ")
+                        .append(p.getClass().getName())
+                        .append(" id=0x").append(Integer.toHexString(p.getId()))
+                        .append(" vis=").append(p.getVisibility())
+                        .append(" ").append(p.getWidth()).append('x').append(p.getHeight())
+                        .append(" @").append(xy[0]).append(',').append(xy[1])
+                        .append(" kids=").append(p instanceof android.view.ViewGroup
+                                ? ((android.view.ViewGroup) p).getChildCount() : -1);
+                if (p == root) break;
+                android.view.ViewParent vp = p.getParent();
+                p = vp instanceof android.view.View ? (android.view.View) vp : null;
+            }
+            HookEntry.log(sb.toString());
+        } catch (Throwable t) {
+            HookEntry.log(tag + ": dump failed " + t);
         }
     }
 
