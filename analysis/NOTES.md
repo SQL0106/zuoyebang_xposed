@@ -944,3 +944,79 @@ hook 各自声明的 `e(Activity)`；另外 `dialog.i` 还有私有直通 `s(Act
 `build.yml` 有 `actions/cache@v6` 缓存 Android platform zip（key `platform-34-ext7_r02-zip-v1`），
 `javac + aapt + d8/r8` 全是 Java 工具，`ubuntu-24.04` x86 runner 3 分钟出包；没有 native/NDK，
 换 ARM runner 不会更快，反而配额更紧。
+
+## 33. 1.4.6–1.4.9：问小帮命中、历史记录页贴底横幅、首页标题栏角标（2026-11-15）
+
+三段都用「真机 `dumpsys activity top` 快照 → 按 id 精确隐藏」的路子解决，没再靠猜。
+
+### 33.1 问小帮：深搜整页才命中（1.4.6/1.4.7）
+
+1.4.5 假设「拍照搜题结果页是第二套底栏」，hook 了 `NewV2PicManySearchActivity.onResume`。
+真机快照推翻了这个假设——结果页底栏**就是** `AISearchBottomInputView`：
+
+```
+ConstraintLayout 0,2590-1280,2800
+ └ FrameLayout #7f0905f3
+   ├ LinearLayout #7f0911f4 (GONE)
+   └ AISearchBottomInputView #7f090b96
+      └ ConstraintLayout #7f090301
+         ├ LinearLayout #7f090305 0,39-532,171   ← 问小帮在这排图标按钮里
+         └ LinearLayout #7f090be3 574,28-1238,182 ← 右侧蓝按钮
+             └ FrameLayout #7f0911f7 664x154     ← 「再拍一页」
+```
+
+之前那条规则只在 `AISearchBottomInputView` 被 attach 时扫描一次，且只针对右侧蓝按钮容器，
+左侧那排根本没进判断。1.4.7 改成 hook `android.app.Activity.onResume`（全 App 通用，类名带
+`search/pic/answer/result` 才扫），1.2s / 3s 各做一次整页深搜（40 层），按固定产品名「问小帮」
+找到文字节点后向上取按钮容器 `GONE`。日志验���：
+
+```
+resume ...NewV2PicManySearchActivity
+whole-page scan tv=21 askText=3 hidden=1
+```
+
+`askText=3` 说明树上挂着 3 个「问小帮」节点（不同态的副本），可见的那个被藏掉，
+第二趟 `hidden=0` 表示不反弹。
+
+### 33.2 历史记录页贴底 VIP 横幅（1.4.8）
+
+快照里横幅在第 9 层，原来的几何规则两个硬伤：`BANNER_DEPTH = 4` 走不到；
+「贴屏幕底 ±6px」而它贴在 content 容器底 2660（屏幕 2800），永远差 140px。
+
+```
+FrameLayout #7f090419 0,169-1280,2660
+ └ RelativeLayout 0,0-1280,2491
+    ├ SecureListView ...
+    ├ View #7f091714 (1px)
+    └ RelativeLayout #7f091716 0,2253-1280,2491  ← 横幅
+```
+
+改法：`ID_RECORD_BANNER = 0x7f091716` 直取 `GONE` + 藏掉上面 1px 分隔线；
+几何兜底深度放到 12，并新增「贴父容器底（减 paddingBottom）也算贴底」，
+父容器是 `AbsListView` / `RecyclerView` / `ScrollView` / `ViewPager` / `WebView` 时不算，
+避免把列表最后一条当横幅藏掉。
+
+### 33.3 首页标题栏红点（1.4.9）
+
+`#7f0911a3` 那条早就生效了（快照里 `G.ED.....`），真正还亮着的是
+`BadgeTextView #7f09067d`（`0,-12-49,51`，在铃铛 `StateImageView #7f09067a` 左边）。
+
+为什么没清掉：
+
+- `hookAllMethods(BadgeTextView, "setVisibility")` —— 该类若没自己声明 `setVisibility`，
+  hook 匹配到 **0 个方法且不抛异常**，等于没装；
+- 角标是布局 XML 里 `visibility="visible"` 直接 inflate 的，从头到尾不调 `setVisibility`；
+- 全树清理只有 600 / 2500ms 两趟，数据回填后角标二次显示，没人管。
+
+改法三层：`ID_BADGES = {0x7f09067d, 0x7f09067c}` 用 `findViewById` 轻量清（4 趟：600/2500/6000/12000ms，
+不占全树清理额度）；`hookAllMethods(View.class, "setVisibility")` 兜底，`thisObject` 类名
+`endsWith("BadgeTextView")` 就把参数改成 `GONE`；原来那条 `BadgeTextView.setVisibility` 钩子保留。
+
+### 33.4 抓快照的正确姿势（踩过的坑）
+
+- 必须先 `dumpsys window | grep mCurrentFocus` 确认前台，再 `dumpsys activity top`；
+  一次 dump 会同时输出 Launcher / Shell / IndexActivity / 目标 Activity 多个 DecorView，
+  要按 `[ActivityName]` 标记定位那一段。
+- 本机有两个 TaskDisplayArea（作业帮和 Via 各有 topResumedActivity），**`mCurrentFocus` 可能是 launcher
+  而目标 Activity 其实已经 resumed**；此时用 `dumpsys activity activities | grep topResumedActivity` 交叉确认。
+- `tools.dexsql.query_resources(ids=...)` 会忽略 `ids` 参数、把整张表倒出来，别用它查 id 名字。
