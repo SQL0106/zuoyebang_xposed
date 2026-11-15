@@ -48,6 +48,11 @@ public class AnswerPageKiller {
             HookEntry.log("AnswerPageKiller: whole ask-help install failed: " + t);
         }
         try {
+            installAnyAskKiller();
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: any ask-help install failed: " + t);
+        }
+        try {
             installRecordBanner(cl);
         } catch (Throwable t) {
             HookEntry.log("AnswerPageKiller install failed: " + t);
@@ -151,6 +156,54 @@ public class AnswerPageKiller {
             }
         });
         HookEntry.log("AnswerPageKiller: whole ask-help hooked");
+    }
+
+    /**
+     * 兜底：任何 Activity resume 时都记一条类名日志；类名像「搜题/结果页」的，
+     * 再在 1.2s / 3s 各扫一遍整页找「问小帮」。不依赖具体 Activity 类名，换页面也能命中。
+     */
+    private static final String[] ASK_ACT_HINTS = {"search", "pic", "answer", "result"};
+    private static final long[] ANY_DELAYS = {1200L, 3000L};
+
+    private static void installAnyAskKiller() {
+        try {
+            XposedBridge.hookAllMethods(android.app.Activity.class, "onResume", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        String cn = param.thisObject.getClass().getName();
+                        HookEntry.log("AnswerPageKiller: resume " + cn);
+                        String low = cn.toLowerCase(java.util.Locale.US);
+                        boolean hit = false;
+                        for (String h : ASK_ACT_HINTS) {
+                            if (low.contains(h)) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                        if (!hit) return;
+                        Object win = XposedHelpers.callMethod(param.thisObject, "getWindow");
+                        if (win == null) return;
+                        Object decor = XposedHelpers.callMethod(win, "getDecorView");
+                        if (!(decor instanceof android.view.View)) return;
+                        final android.view.View root = (android.view.View) decor;
+                        for (long delay : ANY_DELAYS) {
+                            root.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    hideAskHelpDeep(root);
+                                }
+                            }, delay);
+                        }
+                    } catch (Throwable t) {
+                        HookEntry.log("AnswerPageKiller: any-ask resume failed: " + t);
+                    }
+                }
+            });
+            HookEntry.log("AnswerPageKiller: any-activity ask-help hooked");
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: any-activity hook failed: " + t);
+        }
     }
 
     /** 整页里按固定产品名找「问小帮」，只藏它自己的按钮容器。 */
