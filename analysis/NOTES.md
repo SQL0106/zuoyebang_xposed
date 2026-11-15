@@ -869,3 +869,78 @@ dex 类表里一眼能看出的广告专用类（`analysis/classes.txt`）：
    - `actions/upload-artifact@v7` 用 `archive: false` → 直接出 APK，不再套 zip（此时 artifact 名＝文件名）；
    - action 全线升级到 node24 版本（checkout@v7 / cache@v6 / setup-java@v6 / upload-artifact@v7 /
      gh-release@v3），runner 固定 `ubuntu-24.04`（`ubuntu-latest` 2026-10 起要迁 26，别赌镜像）。
+
+## 32. 1.4.2–1.4.5 修复记录（2026-11-15）
+
+### 32.1 首页左上角红点：不是 BadgeTextView
+
+真机 `dumpsys activity top`（`IndexActivity`）里，年级切换右边是：
+
+```
+View{42b7e3c V.ED..... 28,0-217,168 #7f0911a3}
+View{6d8860e V.ED..... 0,0-1280,168 #7f09148c}   ← 同层全宽背景
+```
+
+红点是普通 `View` + 背景 drawable，`BadgeTextView` 的钩子和全树 `BadgeTextView` 清理都碰不到它。
+`HomeChromeKiller` 增加 `ID_RED_DOT_ENTRY = 0x7f0911a3`，每趟清理 `findViewById(...).setVisibility(GONE)`。
+「Hot / new」是功能图标上的另一类角标；当前 activity 树里对应 `BadgeTextView` 已是 `GONE(0,0)`，
+若以后反弹，先确认它是独立控件还是画在图标/Lottie 里，再决定按类名还是按 drawable 处理。
+
+### 32.2 VIP 续费图片浮窗 = `dialog.i`
+
+启动链路：
+
+1. `IndexActivity.M0(Z)` 组装 `[o, s, p, t, q, i, l, k, n]`，塞给 `ZybDialogTaskManager.l(List)`，再 `o()` 开始调度；
+2. `dialog.i.i()` 只调 `r()`：
+   - `KEY_INDEX_AD_DIALOG_SHOW_NUM < 3`（最多 3 次）；
+   - `q(nowSec)`：`KEY_INDEX_AD_DIALOG_SHOW_TIMESTAMP` 为空，或 `now - last >= m0`；
+   - 构造函数里 `m0 = 0x15180` = **86400 秒 = 24 小时**；
+3. `dialog.i.e(Activity)` 发 `ParentActivityActivitylayer$Input.buildInput(1)` 网络请求；
+4. 回调 `s(Activity, model)`：`imgPop` 和 `linkUrlPop` 都非空时，创建
+   `com.baidu.homework.activity.newhomepage.widget.AdLargeImgDialogView(ctx, imgPop, buttonImage)`
+   并用通用 Dialog 弹出；同时累加 show num、写 show timestamp。
+
+所以它弹的时机是**首页 resume/加载完成后**，不是开屏；服务器下发 campaign 且 24h/3 次限制没到才弹。
+
+**之前为什么没拦住**：`DialogKiller` 只 hook 基类 `dialog.u.e(Activity)`，但 `i` 自己 override 了
+`e(Activity)`，Java 虚调用直接进 `i.e`，基类钩子根本不执行。修法是遍历 `i..t` 每个子类，
+hook 各自声明的 `e(Activity)`；另外 `dialog.i` 还有私有直通 `s(Activity, ParentActivityActivitylayer)`，一并短路。
+`ALLOW` 仍为空，即首页任务弹窗全拦。
+
+### 32.3 长图「存题目 / 存解答」分段回归
+
+`d7de503`（1.3.0）把 1.2.9 的题目/解答分界整段删了，`PREP` 和 `CLEAN` 都写死 `split=0`，
+`cropPart()` 必然走「没找到分界，已存整页」。这不是探测失败，是代码被移除。
+
+恢复 1.2.9 的逻辑：在 `PREP` 与 `CLEAN` 里查
+`div,span,p,h1..h4,strong,b,em`，文字去空白后精确匹配
+`答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析`，元素高度 ≤90，
+取最小 `top + pageYOffset` 作为 `split`。`info()` 第 10 段带回 `splitY`，`cropPart()` 按它裁 `q` / `a`。
+`PREP` / `CLEAN` 拼出的 JS 已用 `node --check` 验证。
+
+### 32.4 网页工具条：隐藏收成小按钮 + 禁止长按选中
+
+- 「隐藏」不再把整条 opacity 调到 0.35，而是 `bar.display='none'`，原位置出现
+  `#zyb-mini`（文案「显示」，opacity 0.55）；点它恢复整条。长按仍是彻底消失，底部蓝色按钮长按可唤回。
+- 长按能选中按钮文字：`user-select:none` 会被页面 CSS 覆盖，且 WebView 认 `-webkit-` 前缀。
+  现在 `mk()` 生成的每个按钮都加
+  `-webkit-user-select:none`、`-webkit-touch-callout:none`，并用 `setProperty(...,'important')`；
+  整条 bar 和每个按钮都监听 `selectstart` / `contextmenu` 并 `preventDefault()`。
+
+### 32.5 「问小帮」有两套 native 底栏
+
+1. 搜题页：`AISearchBottomInputView`（`0x7f090be3` 蓝按钮容器 + `0x7f0911f7` 蓝按钮），原有结构规则；
+2. 拍照搜题结果页：`NewV2PicManySearchActivity`，底栏是普通 ViewGroup（分享 / 加错题本 / 问小帮 / 再拍一页），
+   **不在** `AISearchBottomInputView` 里。之前只 hook 第一套，所以第二套的「问小帮」一直在。
+
+修法：hook `NewV2PicManySearchActivity.onResume`，600/1800/3500ms 三趟在 decor 里深搜 40 层，
+只认固定产品名「问小帮」，向上最多 3 层取按钮容器并 `GONE`。分享 / 加错题本 / 再拍一页不动。
+
+教训：native 入口没消失时，先 `dumpsys activity top` 确认**真正前台 Activity** 和它的 View 树；
+截图里看到的底栏不代表当前 dump 就是那个 Activity（从相册看图时前台是相册）。
+
+### 32.6 CI
+
+`build.yml` 有 `actions/cache@v6` 缓存 Android platform zip（key `platform-34-ext7_r02-zip-v1`），
+`javac + aapt + d8/r8` 全是 Java 工具，`ubuntu-24.04` x86 runner 3 分钟出包；没有 native/NDK，
+换 ARM runner 不会更快，反而配额更紧。
