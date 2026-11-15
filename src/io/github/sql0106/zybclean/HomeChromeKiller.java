@@ -46,6 +46,26 @@ public class HomeChromeKiller {
             "绑定作业帮APP账号",   // 账号推广卡：立即绑定 / 随时了解孩子学习进度
     };
 
+    /** 首页标题栏右侧两个角标（BadgeTextView），真机快照里 #7f09067d 一直可见。 */
+    private static final int[] ID_BADGES = {0x7f09067d, 0x7f09067c};
+
+    /** 只按 id 的轻量清理：不遍历整树，可以多排几趟（角标是数据回来后二次显示的）。 */
+    private static final long[] LIGHT_DELAYS = {600L, 2500L, 6000L, 12000L};
+
+    private static void lightClean(View root) {
+        if (root == null) return;
+        for (int id : ID_BADGES) {
+            try {
+                View b = root.findViewById(id);
+                if (b != null && b.getVisibility() != GONE) {
+                    b.setVisibility(GONE);
+                    HookEntry.log("HomeChromeKiller: hide badge 0x" + Integer.toHexString(id));
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     /** 首屏数据可能晚到，所以只留「首次 + 1 次兜底」两趟（后续生命周期回调直接跳过）。 */
     private static final long[] DELAYS = {600L, 2500L};
     private static final int MAX_PASSES = 2;
@@ -76,10 +96,25 @@ public class HomeChromeKiller {
         // 红点角标：所有 BadgeTextView 一律不可见（含底部 tab 红点、铃铛红点）
         try {
             Class<?> badge = XposedHelpers.findClass(BADGE, cl);
+            // 兜底一：BadgeTextView 自己声明的 setVisibility（没声明就 hook 到 0 个方法，静默失败）
             XposedBridge.hookAllMethods(badge, "setVisibility", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     if (param.args != null && param.args.length > 0) {
+                        param.args[0] = Integer.valueOf(GONE);
+                    }
+                }
+            });
+            // 兜底二：真正生效的那条——角标是 XML 里 visibility=visible 直接 inflate 出来的，
+            // 根本不经过 BadgeTextView.setVisibility，只能拦基类 View.setVisibility。
+            XposedBridge.hookAllMethods(View.class, "setVisibility", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args == null || param.args.length == 0) return;
+                    Object self = param.thisObject;
+                    if (!(self instanceof View)) return;
+                    String n = self.getClass().getName();
+                    if (n.endsWith("BadgeTextView")) {
                         param.args[0] = Integer.valueOf(GONE);
                     }
                 }
@@ -98,13 +133,27 @@ public class HomeChromeKiller {
             if (win == null) return;
             final Object decor = XposedHelpers.callMethod(win, "getDecorView");
             if (!(decor instanceof View)) return;
-            if (!hasPassLeft((View) decor)) return;         // 已经清够两趟，不必再排定时器
-            for (long delay : DELAYS) {
-                XposedHelpers.callMethod(decor, "postDelayed", new Runnable() {
+            final View root = (View) decor;
+            // 轻量 id 清理：不受 pass 额度限制，角标可能晚好几秒才被重新显示
+            for (long delay : LIGHT_DELAYS) {
+                XposedHelpers.callMethod(root, "postDelayed", new Runnable() {
                     @Override
                     public void run() {
                         try {
-                            clean((View) decor);
+                            lightClean(root);
+                        } catch (Throwable t) {
+                            HookEntry.log("HomeChromeKiller: lightClean failed: " + t);
+                        }
+                    }
+                }, Long.valueOf(delay));
+            }
+            if (!hasPassLeft(root)) return;         // 已经清够两趟，不必再排全树定时器
+            for (long delay : DELAYS) {
+                XposedHelpers.callMethod(root, "postDelayed", new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            clean(root);
                         } catch (Throwable t) {
                             HookEntry.log("HomeChromeKiller: clean failed: " + t);
                         }
@@ -140,6 +189,7 @@ public class HomeChromeKiller {
     /** 单趟遍历收集，循环结束后统一设置（原先是三趟全树 + 边遍历边写）。 */
     private static void clean(View root) {
         if (root == null || !markPass(root)) return;
+        lightClean(root);
 
         // 年级切换右侧的红点入口：普通 View + 背景，不是 BadgeTextView
         View redDot = root.findViewById(ID_RED_DOT_ENTRY);
