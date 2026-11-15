@@ -1011,6 +1011,15 @@ public final class PageShot {
                     /* 题目/解答分界不再按文字探测（「答案/解析/…」是用户死线）：恒为 0 = 存整页，
                        真的要分段时由 Java 侧传入 splitY。info() 仍保留 split 字段位以兼容 parse()。 */
                     + "var split=0;"
+                    + "try{var heads=document.querySelectorAll('div,span,p,h1,h2,h3,h4,strong,b,em');"
+                    + "for(var hh=0;hh<heads.length;hh++){var he=heads[hh];"
+                    + "var ht=(he.textContent||'').replace(/\\s/g,'');"
+                    + "if(!ht||ht.length>6)continue;"
+                    + "if(!/^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$/.test(ht))continue;"
+                    + "var hr=he.getBoundingClientRect();"
+                    + "if(hr.height<=0||hr.height>90)continue;"
+                    + "var hy=Math.round(hr.top+(window.pageYOffset||0));"
+                    + "if(hy>60&&(split===0||hy<split))split=hy;}}catch(e){}"
                     + "window.__zybStop=1;"
                     + "window.__zybShot={hidden:hidden,target:target,inner:inner,"
                     + "info:function(){var r=target.getBoundingClientRect();"
@@ -1064,8 +1073,17 @@ public final class PageShot {
                     + "scan(document);"
                     + "var hosts=document.querySelectorAll('*');"
                     + "for(var s=0;s<hosts.length;s++){try{if(hosts[s].shadowRoot)scan(hosts[s].shadowRoot);}catch(e){}}"
-                    /* 题目/解答分界不再按文字探测（「答案/解析/…」是用户死线）：恒为 0 = 存整页，
-                       真要分段由 Java 侧传入 splitY。返回值保持 "split|hidden" 两段格式。 */
-                    + "return \"0|\"+hid;"
+                    /* 撑开/重排后重新找「答案/解析」标题的位置（1.2.9 的分段逻辑） */
+                    + "var split=0;"
+                    + "var heads=document.querySelectorAll('div,span,p,h1,h2,h3,h4,strong,b,em');"
+                    + "for(var i2=0;i2<heads.length;i2++){var h2=heads[i2];"
+                    + "var t2=(h2.textContent||'').replace(/[\\s\\u00a0]/g,'');"
+                    + "if(!t2||t2.length>6)continue;"
+                    + "if(!/^(答案|解析|解答|参考答案|答案解析|题目解析|解答过程|详解|分析)$/.test(t2))continue;"
+                    + "var r2;try{r2=h2.getBoundingClientRect();}catch(e){continue;}"
+                    + "if(r2.height<=0||r2.height>90)continue;"
+                    + "var top=r2.top+(window.pageYOffset||0);"
+                    + "if(top>60&&(split===0||top<split))split=top;}"
+                    + "return String(Math.round(split))+\"|\"+hid;"
                     + "}catch(e){return '';}})()";
 }

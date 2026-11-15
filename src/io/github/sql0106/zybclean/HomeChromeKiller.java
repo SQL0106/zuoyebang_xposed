@@ -33,6 +33,12 @@ public class HomeChromeKiller {
     private static final String BADGE = "com.zuoyebang.design.badge.BadgeTextView";
 
     /**
+     * 首页标题栏里年级切换右侧的红点入口（activity dump 里是
+     * {@code View{... 28,0-217,168 #7f0911a3}}，不是 BadgeTextView，所以红点钩子漏了它）。
+     */
+    private static final int ID_RED_DOT_ENTRY = 0x7f0911a3;
+
+    /**
      * 首页 / 我的页「垃圾卡片」里**不会变的固定文案**（用户 2026-11-08 明确：稳定的文案可以按文字匹配，
      * 有专门类名的优先按类名）。命中后向上找卡片容器整块 GONE。
      */
@@ -134,6 +140,13 @@ public class HomeChromeKiller {
     /** 单趟遍历收集，循环结束后统一设置（原先是三趟全树 + 边遍历边写）。 */
     private static void clean(View root) {
         if (root == null || !markPass(root)) return;
+
+        // 年级切换右侧的红点入口：普通 View + 背景，不是 BadgeTextView
+        View redDot = root.findViewById(ID_RED_DOT_ENTRY);
+        if (redDot != null && redDot.getVisibility() != GONE) {
+            hide(redDot);
+            HookEntry.log("HomeChromeKiller: hide top-left red dot");
+        }
 
         List<View> marquees = new ArrayList<View>();
         List<View> icons = new ArrayList<View>();
