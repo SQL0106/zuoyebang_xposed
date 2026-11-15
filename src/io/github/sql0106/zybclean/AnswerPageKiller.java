@@ -43,6 +43,11 @@ public class AnswerPageKiller {
             HookEntry.log("AnswerPageKiller: ask-help install failed: " + t);
         }
         try {
+            installWholeAskKiller(cl);
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: whole ask-help install failed: " + t);
+        }
+        try {
             installRecordBanner(cl);
         } catch (Throwable t) {
             HookEntry.log("AnswerPageKiller install failed: " + t);
@@ -108,6 +113,66 @@ public class AnswerPageKiller {
         HookEntry.log("AnswerPageKiller: ask-help hooked on " + BOTTOM_BAR_CLASS);
     }
 
+    /** 拍照搜题结果页：底栏不是 AISearchBottomInputView，而是整页里的原生 ViewGroup。 */
+    private static final String WHOLE_ACTIVITY =
+            "com.baidu.homework.activity.search.newsearchv3.whole.NewV2PicManySearchActivity";
+    private static final long[] WHOLE_DELAYS = {600L, 1800L, 3500L};
+
+    private static void installWholeAskKiller(ClassLoader cl) {
+        Class<?> act;
+        try {
+            act = XposedHelpers.findClass(WHOLE_ACTIVITY, cl);
+        } catch (Throwable t) {
+            HookEntry.log("AnswerPageKiller: whole activity not found");
+            return;
+        }
+        XposedBridge.hookAllMethods(act, "onResume", new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    Object win = XposedHelpers.callMethod(param.thisObject, "getWindow");
+                    if (win == null) return;
+                    Object decor = XposedHelpers.callMethod(win, "getDecorView");
+                    if (!(decor instanceof android.view.View)) return;
+                    final android.view.View root = (android.view.View) decor;
+                    for (long delay : WHOLE_DELAYS) {
+                        root.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                hideAskHelpDeep(root);
+                            }
+                        }, delay);
+                    }
+                } catch (Throwable t) {
+                    HookEntry.log("AnswerPageKiller: whole ask schedule failed: " + t);
+                }
+            }
+        });
+        HookEntry.log("AnswerPageKiller: whole ask-help hooked");
+    }
+
+    /** 整页里按固定产品名找「问小帮」，只藏它自己的按钮容器。 */
+    private static void hideAskHelpDeep(android.view.View root) {
+        if (root == null) return;
+        java.util.List<android.view.View> tvs = new java.util.ArrayList<android.view.View>();
+        collectText(root, tvs, 0, 40);
+        int hidden = 0;
+        for (android.view.View tv : tvs) {
+            if (!ASK_TEXT.contentEquals(((android.widget.TextView) tv).getText())) continue;
+            if (tv.getVisibility() != android.view.View.VISIBLE) continue;
+            android.view.View btn = buttonOfText(tv, root);
+            if (btn == null || btn == root) continue;
+            if (btn.getWidth() <= 0 || btn.getHeight() <= 0) continue;
+            if (btn.getVisibility() != android.view.View.GONE) {
+                btn.setVisibility(android.view.View.GONE);
+                hidden++;
+            }
+        }
+        if (hidden > 0) {
+            HookEntry.log("AnswerPageKiller: hid " + hidden + " whole-page ask-help entry(ies)");
+        }
+    }
+
     /**
      * 在底栏子树里藏「问小帮」。两条规则，命中任意一条即可：
      * <ol>
@@ -171,12 +236,17 @@ public class AnswerPageKiller {
     }
 
     private static void collectText(android.view.View v, java.util.List<android.view.View> out, int depth) {
-        if (v == null || depth > 12) return;
+        collectText(v, out, depth, 12);
+    }
+
+    private static void collectText(android.view.View v, java.util.List<android.view.View> out,
+                                    int depth, int max) {
+        if (v == null || depth > max) return;
         if (v instanceof android.widget.TextView) out.add(v);
         if (!(v instanceof android.view.ViewGroup)) return;
         android.view.ViewGroup g = (android.view.ViewGroup) v;
         for (int i = 0, n = g.getChildCount(); i < n; i++) {
-            collectText(g.getChildAt(i), out, depth + 1);
+            collectText(g.getChildAt(i), out, depth + 1, max);
         }
     }
 
