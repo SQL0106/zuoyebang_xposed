@@ -16,8 +16,11 @@ public class AnswerPageKiller {
     /** 贴底横幅清理的时机（不按文字匹配，只按几何位置）。 */
     private static final long[] BANNER_DELAYS = {800L, 2500L, 5000L, 9000L};
 
-    /** 横幅只出现在贴底附近，深度 ≤ 4 即可覆盖，遍历量降一个数量级。 */
-    private static final int BANNER_DEPTH = 4;
+    /** 横幅只出现在贴底附近，深度 ≤ 12 覆盖 DecorView→…→content→列表外的贴底容器。 */
+    private static final int BANNER_DEPTH = 12;
+
+    /** 历史记录页贴底 VIP 横幅（「高效学习，一个VIP就够了」）的容器 id，真机 14.34.0 实测。 */
+    private static final int ID_RECORD_BANNER = 0x7f091716;
 
     /** 已隐藏过贴底横幅的根 View；命中后 4 档延时全部短路。 */
     private static final WeakHashMap<Object, Boolean> BANNER_DONE =
@@ -495,6 +498,24 @@ public class AnswerPageKiller {
         return s;
     }
 
+    /**
+     * 是否与父容器底部齐平（横幅常常贴在 content 容器底部，而不是屏幕最底部——
+     * 历史记录页 content 到 2660，下面 140px 是导航栏区域）。
+     * 父容器如果是滚动列表，不能算贴底（列表最后一个 item 也会齐平）。
+     */
+    private static boolean flushToParentBottom(android.view.View v) {
+        android.view.ViewParent vp = v.getParent();
+        if (!(vp instanceof android.view.ViewGroup)) return false;
+        android.view.ViewGroup p = (android.view.ViewGroup) vp;
+        String cn = p.getClass().getName();
+        if (p instanceof android.widget.AbsListView) return false;
+        if (cn.contains("RecyclerView") || cn.contains("ScrollView")
+                || cn.contains("ViewPager") || cn.contains("WebView")) {
+            return false;
+        }
+        return v.getBottom() >= p.getHeight() - p.getPaddingBottom() - 6;
+    }
+
     private static void killBottomBanner(android.view.View root) {
         if (root == null || BANNER_DONE.containsKey(root)) return;
         int dh = root.getHeight();
@@ -507,7 +528,21 @@ public class AnswerPageKiller {
             return;
         }
         baseY = screenY(root);
-        int hidden = walkBanner(root, 0, dw, dh, 0);
+        int hidden = 0;
+        // ① 按 id 直取（真机快照确认的贴底 VIP 横幅容器，最可靠）
+        try {
+            android.view.View byId = root.findViewById(ID_RECORD_BANNER);
+            if (byId != null && byId != root && byId.getVisibility() == android.view.View.VISIBLE) {
+                hideSiblingAbove(byId);
+                hide(byId);
+                hidden++;
+                HookEntry.log("AnswerPageKiller: hid record banner by id 0x"
+                        + Integer.toHexString(ID_RECORD_BANNER));
+            }
+        } catch (Throwable ignored) {
+        }
+        // ② 几何兜底（其他版本/其他入口的同形横幅）
+        hidden += walkBanner(root, 0, dw, dh, 0);
         if (hidden > 0) {
             BANNER_DONE.put(root, Boolean.TRUE);
             HookEntry.log("AnswerPageKiller: hid " + hidden + " bottom banner(s)");
@@ -534,7 +569,7 @@ public class AnswerPageKiller {
         }
         int bottom = top + h;
         boolean hit = depth > 0 && wide && h >= 80 && h <= dh * 3 / 10
-                && bottom >= dh - 6 && bottom <= dh + 6;
+                && ((bottom >= dh - 6 && bottom <= dh + 6) || flushToParentBottom(v));
         if (!hit && depth > 0 && probeLogs < 3
                 && w >= dw * 90 / 100 && h >= 40 && bottom >= dh * 8 / 10) {
             probeLogs++;
